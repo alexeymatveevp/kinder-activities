@@ -1,0 +1,65 @@
+@import url('https://fonts.googleapis.com/css2?family=Quicksand:wght@400;500;600;700&family=Fredoka:wght@400;500;600&display=swap');
+
+:root {
+  --bg-primary: #fef7f0;
+  --bg-secondary: #fff8f3;
+  --text-primary: #2d3436;
+  --text-secondary: #636e72;
+  --accent-coral: #ff7675;
+  --accent-mint: #00b894;
+  --accent-sky: #74b9ff;
+  --accent-lavender: #a29bfe;
+  --accent-sun: #fdcb6e;
+  --accent-peach: #fab1a0;
+  --card-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+  --card-hover-shadow: 0 8px 30px rgba(0, 0, 0, 0.12);
+  --border-radius: 20px;
+  --border-radius-sm: 12px;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Quicksand', sans-serif;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  line-height: 1.6;
+  min-height: 100vh;
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: 
+    radial-gradient(circle at 10% 20%, rgba(255, 118, 117, 0.08) 0%, transparent 50%),
+    radial-gradient(circle at 90% 80%, rgba(116, 185, 255, 0.08) 0%, transparent 50%),
+    radial-gradient(circle at 50% 50%, rgba(253, 203, 110, 0.05) 0%, transparent 50%);
+  pointer-events: none;
+  z-index: -1;
+}
+
+#root {
+  width: 100%;
+}
+
+h1, h2, h3 {
+  font-family: 'Fredoka', sans-serif;
+}
+
+a {
+  color: var(--accent-sky);
+  text-decoration: none;
+  transition: color 0.2s ease;
+}
+
+a:hover {
+  color: var(--accent-lavender);
+}

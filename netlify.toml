@@ -1,0 +1,57 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+  functions = "netlify/functions"
+
+[functions]
+  node_bundler = "esbuild"
+  included_files = ["netlify/lib/**"]
+
+# Development settings
+[dev]
+  command = "npm run dev"
+  targetPort = 5173
+  port = 8888
+  autoLaunch = false
+
+# Redirects for SPA
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+  conditions = {Role = ["admin"]}
+
+# API redirects (optional, for cleaner URLs)
+[[redirects]]
+  from = "/api/activities"
+  to = "/.netlify/functions/activities"
+  status = 200
+
+[[redirects]]
+  from = "/api/activities/rating"
+  to = "/.netlify/functions/update-rating"
+  status = 200
+
+[[redirects]]
+  from = "/api/activities/category"
+  to = "/.netlify/functions/update-category"
+  status = 200
+
+[[redirects]]
+  from = "/api/activities/name"
+  to = "/.netlify/functions/update-name"
+  status = 200
+
+[[redirects]]
+  from = "/api/activities/comment"
+  to = "/.netlify/functions/update-comment"
+  status = 200
+
+[[redirects]]
+  from = "/api/activities/delete"
+  to = "/.netlify/functions/delete-activity"
+  status = 200
+
+# Environment variable hints (for Netlify dashboard)
+[context.production.environment]
+  NODE_VERSION = "20"
