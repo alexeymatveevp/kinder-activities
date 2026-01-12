@@ -14,14 +14,7 @@
   port = 8888
   autoLaunch = false
 
-# Redirects for SPA
-[[redirects]]
-  from = "/*"
-  to = "/index.html"
-  status = 200
-  conditions = {Role = ["admin"]}
-
-# API redirects (optional, for cleaner URLs)
+# API redirects (must come BEFORE the SPA catch-all)
 [[redirects]]
   from = "/api/activities"
   to = "/.netlify/functions/activities"
@@ -50,6 +43,12 @@
 [[redirects]]
   from = "/api/activities/delete"
   to = "/.netlify/functions/delete-activity"
+  status = 200
+
+# SPA catch-all redirect (must be LAST)
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
   status = 200
 
 # Environment variable hints (for Netlify dashboard)
