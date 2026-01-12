@@ -7,6 +7,7 @@
     "dev": "vite",
     "dev:netlify": "netlify dev",
     "build": "vite build",
+    "generate-icons": "node scripts/generate-pwa-icons.js",
     "lint": "eslint .",
     "preview": "vite preview",
     "migrate-to-sheets": "node scripts/migrate-to-sheets.js",
@@ -30,6 +31,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
+    "sharp": "^0.33.0",
     "@types/node": "^25.0.3",
     "@types/node-telegram-bot-api": "^0.64.13",
     "@types/react": "^19.2.5",
@@ -42,6 +44,7 @@
     "netlify-cli": "^21.0.0",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
-    "vite": "^7.2.4"
+    "vite": "^7.2.4",
+    "vite-plugin-pwa": "^1.0.0"
   }
 }
