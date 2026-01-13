@@ -305,16 +305,17 @@ function ActivityCard({ activity, onRatingChange, onRemove, onCategoryChange, on
             onSave={handleNameChange}
           />
         </h3>
-        <div className="card-header-actions">
-          <CategorySelect
-            category={activity.category}
-            allCategories={allCategories}
-            onChange={handleCategorySelect}
-          />
-          <button className="remove-btn" onClick={handleRemove} title="Remove activity">
-            🗑️
-          </button>
-        </div>
+        <button className="remove-btn" onClick={handleRemove} title="Remove activity">
+          🗑️
+        </button>
+      </div>
+      
+      <div className="card-category-row">
+        <CategorySelect
+          category={activity.category}
+          allCategories={allCategories}
+          onChange={handleCategorySelect}
+        />
       </div>
       
       <StarRating 
@@ -418,6 +419,21 @@ function ActivityCard({ activity, onRatingChange, onRemove, onCategoryChange, on
           </div>
         </div>
       )}
+      
+      <div className="card-quick-actions">
+        <button 
+          className={`quick-action-btn ${activity.category === 'aggregator' ? 'active' : ''}`}
+          onClick={() => handleCategorySelect('aggregator')}
+        >
+          📑 Mark as Aggregator
+        </button>
+        <button 
+          className={`quick-action-btn ${activity.category === 'article' ? 'active' : ''}`}
+          onClick={() => handleCategorySelect('article')}
+        >
+          📰 Mark as Article
+        </button>
+      </div>
       
       <div className="card-footer">
         <div className="status-alive">

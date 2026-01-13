@@ -375,8 +375,8 @@
   min-width: 0;
 }
 
-.card-header-actions {
-  flex-shrink: 0;
+.card-category-row {
+  margin-bottom: 0.75rem;
 }
 
 .card-title a {
@@ -413,12 +413,6 @@
 }
 
 /* Card Header Actions */
-.card-header-actions {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
 .remove-btn {
   background: none;
   border: none;
@@ -849,6 +843,40 @@
   font-size: 0.75rem;
   color: #9ca3af;
   margin-left: auto;
+}
+
+/* Quick Action Buttons */
+.card-quick-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 1rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid #f0f0f0;
+}
+
+.quick-action-btn {
+  flex: 1;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  background: white;
+  font-family: 'Quicksand', sans-serif;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.quick-action-btn:hover {
+  border-color: #bbb;
+  background: #f8f8f8;
+}
+
+.quick-action-btn.active {
+  background: #e3f2fd;
+  border-color: #2196f3;
+  color: #1565c0;
 }
 
 /* Card Footer */
