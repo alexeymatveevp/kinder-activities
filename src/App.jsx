@@ -278,13 +278,12 @@ function UserComment({ comment, onSave }) {
   )
 }
 
-function ActivityCard({ activity, onRatingChange, onRemove, onCategoryChange, onCommentChange, onNameChange, onSelect, allCategories }) {
+function ActivityCard({ activity, onRatingChange, onRemove, onCategoryChange, onCommentChange, onNameChange, allCategories }) {
   const googleMapsUrl = activity.address 
     ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(activity.address)}`
     : null
 
-  const handleRemove = (e) => {
-    e.stopPropagation()
+  const handleRemove = () => {
     onRemove(activity.url)
   }
 
@@ -296,14 +295,8 @@ function ActivityCard({ activity, onRatingChange, onRemove, onCategoryChange, on
     onNameChange(activity.url, newName)
   }
 
-  const handleCardClick = () => {
-    if (onSelect) {
-      onSelect(activity.url)
-    }
-  }
-
   return (
-    <article className={`activity-card ${onSelect ? 'clickable' : ''}`} onClick={handleCardClick}>
+    <article className="activity-card">
       <div className="card-header">
         <h3 className="card-title">
           <EditableName 
@@ -466,7 +459,6 @@ function App() {
   const [error, setError] = useState(null)
   const [activeCategory, setActiveCategory] = useState('unrated')
   const [searchQuery, setSearchQuery] = useState('')
-  const [selectedUrl, setSelectedUrl] = useState(null)
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
   const [sidebarDragX, setSidebarDragX] = useState(null) // null = not dragging, number = current position
   const searchInputRef = useRef(null)
@@ -675,10 +667,6 @@ function App() {
     rated: activities.filter(a => a.userRating).length
   }), [activities, filteredActivities])
 
-  const selectedActivity = selectedUrl 
-    ? activities.find(a => a.url === selectedUrl) 
-    : null
-
   const handleRatingChange = useCallback(async (url, rating) => {
     try {
       const response = await fetch(`${API_BASE}/update-rating`, {
@@ -717,16 +705,11 @@ function App() {
       
       // Update local state - remove the activity
       setActivities(prev => prev.filter(a => a.url !== url))
-      
-      // Clear selection if the removed item was selected
-      if (selectedUrl === url) {
-        setSelectedUrl(null)
-      }
     } catch (error) {
       console.error('Error removing activity:', error)
       alert('Failed to remove activity. Please try again.')
     }
-  }, [selectedUrl])
+  }, [])
 
   const handleCategoryChange = useCallback(async (url, category) => {
     try {
@@ -810,21 +793,16 @@ function App() {
           return
         }
         
-        if (selectedUrl) {
-          // Go back to grid view
-          setSelectedUrl(null)
-        } else {
-          // Reset filters and focus search
-          setActiveCategory('unrated')
-          setSearchQuery('')
-          searchInputRef.current?.focus()
-        }
+        // Reset filters and focus search
+        setActiveCategory('unrated')
+        setSearchQuery('')
+        searchInputRef.current?.focus()
       }
     }
     
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [selectedUrl])
+  }, [])
 
   // Show loading state
   if (isLoading) {
@@ -961,22 +939,7 @@ function App() {
           </div>
         </div>
         
-        {selectedActivity ? (
-          <div className="selected-activity">
-            <button className="back-btn" onClick={() => setSelectedUrl(null)}>
-              ← Back to all
-            </button>
-            <ActivityCard 
-              activity={selectedActivity} 
-              onRatingChange={handleRatingChange}
-              onRemove={handleRemove}
-              onCategoryChange={handleCategoryChange}
-              onCommentChange={handleCommentChange}
-              onNameChange={handleNameChange}
-              allCategories={allCategories}
-            />
-          </div>
-        ) : filteredActivities.length > 0 ? (
+        {filteredActivities.length > 0 ? (
           <div className="activities-grid">
             {filteredActivities.map((activity, index) => (
               <ActivityCard 
@@ -987,7 +950,6 @@ function App() {
                 onCategoryChange={handleCategoryChange}
                 onCommentChange={handleCommentChange}
                 onNameChange={handleNameChange}
-                onSelect={setSelectedUrl}
                 allCategories={allCategories}
               />
             ))}

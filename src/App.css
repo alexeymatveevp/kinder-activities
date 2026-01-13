@@ -253,27 +253,6 @@
 }
 
 /* Back Button */
-.back-btn {
-  background: none;
-  border: none;
-  color: var(--accent-coral);
-  font-family: 'Quicksand', sans-serif;
-  font-weight: 600;
-  font-size: 0.95rem;
-  cursor: pointer;
-  padding: 0.5rem 0;
-  margin-bottom: 1rem;
-  transition: color 0.2s ease;
-}
-
-.back-btn:hover {
-  color: var(--accent-lavender);
-}
-
-.selected-activity .activity-card {
-  max-width: 700px;
-}
-
 /* Header */
 .header {
   text-align: center;
@@ -377,10 +356,6 @@
 .activity-card:hover {
   transform: translateY(-5px);
   box-shadow: var(--card-hover-shadow);
-}
-
-.activity-card.clickable {
-  cursor: pointer;
 }
 
 .card-header {
