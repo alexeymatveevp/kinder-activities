@@ -7,6 +7,7 @@ const API_BASE = '/.netlify/functions'
 const CATEGORY_LABELS = {
   all: 'All',
   unrated: '☆ Not starred',
+  starred: '⭐ Starred',
   zoo: '🦁 Zoo',
   museum: '🏛️ Museum',
   climbing: '🧗 Climbing',
@@ -15,8 +16,12 @@ const CATEGORY_LABELS = {
   playground: '🎠 Playground',
   festival: '🎪 Festival',
   aggregator: '📑 Aggregator',
+  article: '📰 Article',
   other: '✨ Other'
 }
+
+// Categories that are toggled separately (not in main filter list)
+const TOGGLE_CATEGORIES = ['aggregator', 'article']
 
 const CATEGORY_ICONS = {
   zoo: '🦁',
@@ -626,7 +631,9 @@ function App() {
   // Categories for sidebar filter (includes 'all')
   const categories = useMemo(() => {
     const cats = new Set(activities.map(a => a.category || 'other'))
-    return ['all', 'unrated', ...Array.from(cats).sort()]
+    // Exclude toggle categories from main filter list
+    const mainCats = Array.from(cats).filter(c => !TOGGLE_CATEGORIES.includes(c)).sort()
+    return ['all', 'unrated', 'starred', ...mainCats]
   }, [activities])
   
   const filteredActivities = useMemo(() => {
@@ -634,7 +641,14 @@ function App() {
     
     // Filter by category or special filters
     if (activeCategory === 'unrated') {
-      result = result.filter(a => !a.userRating)
+      // Not starred: exclude aggregator and article by default
+      result = result.filter(a => {
+        const cat = a.category || 'other'
+        return !a.userRating && !TOGGLE_CATEGORIES.includes(cat)
+      })
+    } else if (activeCategory === 'starred') {
+      // Starred: show only rated activities
+      result = result.filter(a => a.userRating)
     } else if (activeCategory !== 'all') {
       result = result.filter(a => (a.category || 'other') === activeCategory)
     }
@@ -895,6 +909,30 @@ function App() {
             </button>
           ))}
         </nav>
+        
+        <div className="sidebar-toggles">
+          <div className="sidebar-toggles-label">Other categories:</div>
+          <div className="sidebar-toggle-buttons">
+            <button
+              className={`sidebar-toggle-btn ${activeCategory === 'aggregator' ? 'active' : ''}`}
+              onClick={() => {
+                setActiveCategory('aggregator')
+                setIsMobileMenuOpen(false)
+              }}
+            >
+              {CATEGORY_LABELS.aggregator}
+            </button>
+            <button
+              className={`sidebar-toggle-btn ${activeCategory === 'article' ? 'active' : ''}`}
+              onClick={() => {
+                setActiveCategory('article')
+                setIsMobileMenuOpen(false)
+              }}
+            >
+              {CATEGORY_LABELS.article}
+            </button>
+          </div>
+        </div>
       </aside>
       
       {/* Main content */}
