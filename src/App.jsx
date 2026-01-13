@@ -6,6 +6,7 @@ const API_BASE = '/.netlify/functions'
 
 const CATEGORY_LABELS = {
   all: 'All',
+  unrated: '☆ Not starred',
   zoo: '🦁 Zoo',
   museum: '🏛️ Museum',
   climbing: '🧗 Climbing',
@@ -458,10 +459,139 @@ function App() {
   const [activities, setActivities] = useState([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState(null)
-  const [activeCategory, setActiveCategory] = useState('all')
+  const [activeCategory, setActiveCategory] = useState('unrated')
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedUrl, setSelectedUrl] = useState(null)
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
+  const [sidebarDragX, setSidebarDragX] = useState(null) // null = not dragging, number = current position
   const searchInputRef = useRef(null)
+  const sidebarRef = useRef(null)
+  const touchStartX = useRef(null)
+  const touchStartY = useRef(null)
+  const isDragging = useRef(false)
+  const sidebarWidth = useRef(280)
+
+  // Block body scroll when sidebar is open or being dragged
+  useEffect(() => {
+    const shouldBlockScroll = isMobileMenuOpen || sidebarDragX !== null
+    if (shouldBlockScroll) {
+      document.body.style.overflow = 'hidden'
+      document.body.style.touchAction = 'none'
+    } else {
+      document.body.style.overflow = ''
+      document.body.style.touchAction = ''
+    }
+    return () => {
+      document.body.style.overflow = ''
+      document.body.style.touchAction = ''
+    }
+  }, [isMobileMenuOpen, sidebarDragX])
+
+  // Swipe gesture handling for mobile menu - follows finger
+  useEffect(() => {
+    const handleTouchStart = (e) => {
+      const startX = e.touches[0].clientX
+      touchStartX.current = startX
+      touchStartY.current = e.touches[0].clientY
+      
+      // Get sidebar width
+      if (sidebarRef.current) {
+        sidebarWidth.current = sidebarRef.current.offsetWidth
+      }
+      
+      // Start dragging if: from left edge (to open) or sidebar is open (to close)
+      if (startX < 30 || isMobileMenuOpen) {
+        isDragging.current = true
+      }
+    }
+
+    const handleTouchMove = (e) => {
+      if (!isDragging.current || touchStartX.current === null) return
+      
+      const currentX = e.touches[0].clientX
+      const currentY = e.touches[0].clientY
+      const deltaX = Math.abs(currentX - touchStartX.current)
+      const deltaY = Math.abs(currentY - touchStartY.current)
+      
+      // If horizontal movement is significant, prevent vertical scroll
+      if (deltaX > 10 && deltaX > deltaY) {
+        e.preventDefault()
+      }
+      
+      // Cancel if scrolling vertically more than horizontally
+      if (deltaY > 50 && deltaY > deltaX) {
+        isDragging.current = false
+        setSidebarDragX(null)
+        return
+      }
+      
+      // Calculate sidebar position
+      let position
+      if (isMobileMenuOpen) {
+        // Dragging to close: start from 0 (fully open)
+        position = Math.min(0, currentX - touchStartX.current)
+      } else {
+        // Dragging to open: start from -sidebarWidth (fully closed)
+        position = Math.min(0, -sidebarWidth.current + currentX)
+      }
+      
+      setSidebarDragX(position)
+    }
+
+    const handleTouchEnd = (e) => {
+      if (!isDragging.current) {
+        touchStartX.current = null
+        touchStartY.current = null
+        return
+      }
+      
+      const endX = e.changedTouches[0].clientX
+      const deltaX = endX - touchStartX.current
+      const velocity = deltaX / 10 // Simple velocity estimate
+      
+      // Decide whether to open or close based on position and velocity
+      if (sidebarDragX !== null) {
+        const threshold = -sidebarWidth.current / 2
+        const shouldOpen = sidebarDragX > threshold || velocity > 5
+        const shouldClose = sidebarDragX < threshold || velocity < -5
+        
+        if (isMobileMenuOpen) {
+          setIsMobileMenuOpen(!shouldClose)
+        } else {
+          setIsMobileMenuOpen(shouldOpen)
+        }
+      }
+      
+      // Reset
+      isDragging.current = false
+      touchStartX.current = null
+      touchStartY.current = null
+      setSidebarDragX(null)
+    }
+
+    document.addEventListener('touchstart', handleTouchStart, { passive: true })
+    document.addEventListener('touchmove', handleTouchMove, { passive: false })
+    document.addEventListener('touchend', handleTouchEnd, { passive: true })
+
+    return () => {
+      document.removeEventListener('touchstart', handleTouchStart)
+      document.removeEventListener('touchmove', handleTouchMove)
+      document.removeEventListener('touchend', handleTouchEnd)
+    }
+  }, [isMobileMenuOpen, sidebarDragX])
+
+  // Calculate sidebar style for dragging
+  const getSidebarStyle = () => {
+    if (sidebarDragX !== null && typeof window !== 'undefined' && window.innerWidth <= 768) {
+      // During drag: follow finger, no transition
+      return {
+        transform: `translateX(${sidebarDragX}px)`,
+        transition: 'none'
+      }
+    }
+    // Not dragging: use CSS classes for animation
+    return {}
+  }
 
   // Fetch activities from API
   const fetchActivities = useCallback(async () => {
@@ -496,14 +626,16 @@ function App() {
   // Categories for sidebar filter (includes 'all')
   const categories = useMemo(() => {
     const cats = new Set(activities.map(a => a.category || 'other'))
-    return ['all', ...Array.from(cats).sort()]
+    return ['all', 'unrated', ...Array.from(cats).sort()]
   }, [activities])
   
   const filteredActivities = useMemo(() => {
     let result = activities
     
-    // Filter by category
-    if (activeCategory !== 'all') {
+    // Filter by category or special filters
+    if (activeCategory === 'unrated') {
+      result = result.filter(a => !a.userRating)
+    } else if (activeCategory !== 'all') {
       result = result.filter(a => (a.category || 'other') === activeCategory)
     }
     
@@ -525,9 +657,9 @@ function App() {
   const stats = useMemo(() => ({
     total: activities.length,
     categories: new Set(activities.map(a => a.category)).size,
-    active: activities.filter(a => a.alive).length,
+    visible: filteredActivities.length,
     rated: activities.filter(a => a.userRating).length
-  }), [activities])
+  }), [activities, filteredActivities])
 
   const selectedActivity = selectedUrl 
     ? activities.find(a => a.url === selectedUrl) 
@@ -669,7 +801,7 @@ function App() {
           setSelectedUrl(null)
         } else {
           // Reset filters and focus search
-          setActiveCategory('all')
+          setActiveCategory('unrated')
           setSearchQuery('')
           searchInputRef.current?.focus()
         }
@@ -684,11 +816,7 @@ function App() {
   if (isLoading) {
     return (
       <div className="app-layout">
-        <aside className="sidebar">
-          <div className="sidebar-header">
-            <h2>📋 All Sites</h2>
-          </div>
-        </aside>
+        <aside className="sidebar"></aside>
         <main className="main-content">
           <header className="header">
             <h1>🎨 Kinder Activities</h1>
@@ -704,11 +832,7 @@ function App() {
   if (error) {
     return (
       <div className="app-layout">
-        <aside className="sidebar">
-          <div className="sidebar-header">
-            <h2>📋 All Sites</h2>
-          </div>
-        </aside>
+        <aside className="sidebar"></aside>
         <main className="main-content">
           <header className="header">
             <h1>🎨 Kinder Activities</h1>
@@ -722,13 +846,21 @@ function App() {
 
   return (
     <div className="app-layout">
-      {/* Sidebar with URL list */}
-      <aside className="sidebar">
-        <div className="sidebar-header">
-          <h2>📋 All Sites</h2>
-          <span className="url-count">{filteredActivities.length}</span>
-        </div>
-        
+      {/* Mobile menu overlay */}
+      <div 
+        className={`sidebar-overlay ${isMobileMenuOpen ? 'visible' : ''}`}
+        onClick={() => setIsMobileMenuOpen(false)}
+      />
+      
+      {/* Swipe indicator for mobile */}
+      <div className="swipe-indicator" />
+      
+      {/* Sidebar with search and filters */}
+      <aside 
+        ref={sidebarRef}
+        className={`sidebar ${isMobileMenuOpen ? 'open' : ''} ${sidebarDragX !== null ? 'dragging' : ''}`}
+        style={getSidebarStyle()}
+      >
         <div className="search-container">
           <span className="search-icon">🔍</span>
           <input
@@ -754,32 +886,15 @@ function App() {
             <button
               key={cat}
               className={`sidebar-filter-btn ${activeCategory === cat ? 'active' : ''}`}
-              onClick={() => setActiveCategory(cat)}
+              onClick={() => {
+                setActiveCategory(cat)
+                setIsMobileMenuOpen(false)
+              }}
             >
               {CATEGORY_LABELS[cat] || cat}
             </button>
           ))}
         </nav>
-        
-        <ul className="url-list">
-          {filteredActivities.map((activity) => (
-            <li 
-              key={activity.url}
-              className={`url-item ${selectedUrl === activity.url ? 'selected' : ''}`}
-              onClick={() => setSelectedUrl(activity.url)}
-            >
-              <span className="url-icon">{CATEGORY_ICONS[activity.category] || '✨'}</span>
-              <div className="url-info">
-                <span className="url-name">{activity.shortName?.slice(0, 50) || 'Unnamed'}...</span>
-                <span className="url-link">{new URL(activity.url).hostname}</span>
-              </div>
-              {activity.userRating && (
-                <span className="url-rating">{'★'.repeat(activity.userRating)}</span>
-              )}
-              <span className={`url-status ${activity.alive ? 'alive' : 'dead'}`}></span>
-            </li>
-          ))}
-        </ul>
       </aside>
       
       {/* Main content */}
@@ -799,8 +914,8 @@ function App() {
             <div className="stat-label">Categories</div>
           </div>
           <div className="stat-item">
-            <div className="stat-number">{stats.active}</div>
-            <div className="stat-label">Active</div>
+            <div className="stat-number stat-number--visible">{stats.visible}</div>
+            <div className="stat-label">Visible</div>
           </div>
           <div className="stat-item">
             <div className="stat-number">{stats.rated}</div>

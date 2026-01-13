@@ -71,6 +71,7 @@ export default defineConfig({
     }),
   ],
   server: {
+    host: true, // Expose on network for mobile testing
     proxy: {
       // Proxy API requests to Netlify CLI dev server during local development
       '/.netlify/functions': {
