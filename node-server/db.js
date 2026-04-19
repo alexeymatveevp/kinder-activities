@@ -2,9 +2,16 @@ import Database from 'better-sqlite3';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
+import dotenv from 'dotenv';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DB_PATH = path.join(__dirname, '..', 'data', 'activities.db');
+const REPO_ROOT = path.join(__dirname, '..');
+
+dotenv.config({ path: path.join(REPO_ROOT, '.env') });
+
+const DB_PATH = process.env.KINDER_DB_PATH
+  ? path.resolve(REPO_ROOT, process.env.KINDER_DB_PATH)
+  : path.join(REPO_ROOT, 'data', 'activities.db');
 
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 

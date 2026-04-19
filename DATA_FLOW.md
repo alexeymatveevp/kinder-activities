@@ -2,56 +2,57 @@
 
 ## Overview
 
-**Kinder Activities** discovers and catalogues kid-friendly activities in Munich and Bavaria. It combines Google search, web crawling, and LLM analysis. Google Sheets serves as the primary database, with a React frontend deployed on Netlify.
+**Kinder Activities** discovers and catalogues kid-friendly activities in Munich and Bavaria. It combines Google search, web crawling, and LLM analysis. A local **SQLite** database is the source of truth; a small **Express** server (Node) serves the React frontend; Python scripts enrich the database.
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                         GOOGLE SHEETS (Database)                        │
-│  Columns: url | shortName | alive | lastUpdated | category | openHours │
-│           | address | services | description | userRating | drivingMin │
-│           | transitMin | distanceKm | userComment | userRemoved        │
-└─────────────────────────────────────────────────────────────────────────┘
-                                    ▲
-                    ┌───────────────┼───────────────┐
-                    │               │               │
-                    ▼               ▼               ▼
-        ┌─────────────────┐  ┌─────────────┐  ┌──────────────┐
-        │  Netlify         │  │  Python      │  │  Telegram    │
-        │  Functions (JS)  │  │  Scripts     │  │  Bot         │
-        │                  │  │              │  │              │
-        │  activities.js   │  │  run.py      │  │  bot.py      │
-        │  update-*.js     │  │  serp.py     │  │              │
-        │  delete-*.js     │  │  analyser    │  │              │
-        └────────┬─────────┘  │  crawler     │  └──────────────┘
-                 ▲            │  distance    │
-                 │            └──────────────┘
-              (API)                │
-                 │         ┌──────┴───────┐
-                 │         ▼              ▼
-        ┌──────────────────────┐  ┌──────────────────┐
-        │  React Frontend      │  │  Data Files       │
-        │  (src/App.jsx)       │  │  data.json        │
-        │                      │  │  all-urls.json    │
-        │  Displays:           │  │  serp/query.json  │
-        │  - Activities list   │  │  serp/last-...    │
-        │  - Filter/search     │  └──────────────────┘
-        │  - Edit/rate         │
-        └──────────────────────┘
+┌────────────────────────────────────────────────────────────────────────┐
+│                       SQLite (data/activities.db)                      │
+│  activities table:                                                     │
+│   url | shortName | alive | lastUpdated | category | openHours |       │
+│   address | services | description | userRating | drivingMinutes |     │
+│   transitMinutes | distanceKm | userComment | price                    │
+└────────────────────────────────────────────────────────────────────────┘
+                                   ▲
+                   ┌───────────────┼───────────────┐
+                   │               │               │
+                   ▼               ▼               ▼
+      ┌─────────────────────┐  ┌─────────────┐  ┌──────────────┐
+      │  Express API (Node) │  │  Python     │  │  Telegram    │
+      │  node-server/       │  │  Scripts    │  │  Bot         │
+      │                     │  │             │  │              │
+      │  db.js (SQLite)     │  │  run.py     │  │  bot.py      │
+      │  server.js (:3002)  │  │  serp.py    │  │              │
+      │                     │  │  analyser   │  │              │
+      └──────────┬──────────┘  │  crawler    │  └──────────────┘
+                 ▲             │  distance   │
+                 │             └─────────────┘
+             /api/* (via Vite proxy in dev)
+                 │
+      ┌────────────────────────┐
+      │  React Frontend        │
+      │  (src/App.jsx)         │
+      │                        │
+      │  - Activities list     │
+      │  - Filter/search       │
+      │  - Edit/rate           │
+      └────────────────────────┘
 ```
+
+All processes (Express server, Python scripts, Telegram bot) open the same `activities.db` file directly via their respective SQLite libraries (`better-sqlite3` for Node, `sqlite3` stdlib for Python). WAL mode is enabled so concurrent reads/writes are safe.
 
 ---
 
-## Full Pipeline (run.py)
+## Full Pipeline (`run.py`)
 
-Execute `npm run run` or `python run.py` to run steps 1-4 in sequence:
+Execute `npm run run` to run steps 1–4 in sequence:
 
 ```
-Step 1: serp.py              → data/serp/query.json
+Step 1: serp.py                        → data/serp/query.json
 Step 2: merge-serp-query-to-allurls.py → updates data/all-urls.json
-Step 3: check-alive.py       → updates data/all-urls.json (alive + contentType)
-Step 4: run_analyser_for_all_urls.py   → saves to Google Sheets
+Step 3: check-alive.py                 → updates data/all-urls.json (alive + contentType)
+Step 4: run_analyser_for_all_urls.py   → writes to SQLite (activities table)
 ```
 
 ---
@@ -60,31 +61,23 @@ Step 4: run_analyser_for_all_urls.py   → saves to Google Sheets
 
 **Purpose:** Find new activity URLs via Google Search using SerpAPI.
 
-**Process:**
 - Generates random queries combining keyword groups:
   - **A:** "Kinder", "mit Kindern", "Familie"
   - **B:** "Aktivitäten", "Freizeit", "Ausflüge", "Tipps"
   - **C:** "München", "Umgebung München", "Bayern"
   - **Extra filters:** "Indoor", "Geheimtipps", "Wochenende", "Kleinkinder", "kostenlos"
   - **Site filters:** `site:.de`, `site:.muenchen.de`, or none
-- Runs 4 queries x 10 pages x 10 results = ~400 URLs per run (after dedup)
+- Runs 4 queries × 10 pages × 10 results ≈ 400 URLs per run (after dedup)
 
 **Output:**
 - `data/serp/query.json` — list of `{title, link, snippet}`
-- `data/serp/last-serp-requests.json` — metadata (date, query, count)
+- `data/serp/last-serp-requests.json` — metadata
 
 ---
 
 ## Step 2: Merge SERP Results (`merge-serp-query-to-allurls.py`)
 
-**Purpose:** Add new URLs from SERP to the all-urls database.
-
-**Process:**
-1. Loads `data/serp/query.json`
-2. Loads `data/all-urls.json`
-3. Adds new URLs with title/snippet, updates existing entries
-
-**Output:** Updates `data/all-urls.json`
+Adds new URLs from `data/serp/query.json` into `data/all-urls.json`.
 
 **Entry schema:**
 ```json
@@ -94,8 +87,7 @@ Step 4: run_analyser_for_all_urls.py   → saves to Google Sheets
   "title": "Google Search Title",
   "snippet": "Snippet text",
   "alive": true,
-  "contentType": "website",
-  "userRemoved": false
+  "contentType": "website"
 }
 ```
 
@@ -103,58 +95,48 @@ Step 4: run_analyser_for_all_urls.py   → saves to Google Sheets
 
 ## Step 3: Check Alive (`check-alive.py`)
 
-**Purpose:** Verify which URLs are reachable and determine content type.
+Verifies which URLs are reachable and determines content type.
 
-**Process:**
-1. Loads all URLs from `data/all-urls.json`
-2. Makes concurrent HEAD/GET requests (max 10 concurrent via aiohttp)
-3. Sets `alive` (status < 400) and `contentType` (website, pdf, json, text, image, video, audio, xml, other, unknown)
+- Concurrent HEAD/GET requests via aiohttp (max 10 concurrent)
+- Sets `alive` (status < 400) and `contentType` (website, pdf, json, …)
 
-**Output:** Updates `data/all-urls.json` with `alive` and `contentType` fields
-
-**Important:** Only URLs with `contentType === "website"` and `alive === true` proceed to Step 4.
+Only URLs with `contentType === "website"` and `alive === true` proceed to Step 4.
 
 ---
 
 ## Step 4: Analyse & Extract (`run_analyser_for_all_urls.py`)
 
-**Purpose:** Crawl websites and use LLM to extract structured activity data, then save to Google Sheets.
+Crawls websites, extracts structured activity data with an LLM, and writes to SQLite.
 
-**Filters:** Only processes URLs that are alive websites, not already in Google Sheets, and not user-removed.
+**Filter:** only alive website URLs that aren't already in the `activities` table.
 
 ### 4a. Web Crawling (`crawler.py` — Scrapy)
-
 - Crawls up to 10 pages per site (main + 9 linked)
 - Prioritizes links with keywords: kontakt, preise, öffnungszeiten, anfahrt, angebot, about, etc.
 - Strips scripts, styles, navigation, footers
-- Returns structured page content
 
 ### 4b. LLM Analysis (`llm_service.py` — OpenAI gpt-4o-mini)
-
-- Truncates content to max 100,000 chars
+- Truncates content to 100,000 chars
 - Extracts: **category**, **openHours**, **address**, **prices**, **services**, **description**, **shortName**, **ageRange**
-- Categories from predefined list (museum, playground, sports, zoo, etc.)
 
 ### 4c. Distance Calculation (`distance_from_home.py`)
-
 If address is found:
-1. Geocodes via **Nominatim** (OpenStreetMap — free)
-2. Calculates driving time via **OSRM** (free routing engine)
-3. Estimates transit time: `driving_time * 1.8 + 12 min`
+1. Geocode via Nominatim (OpenStreetMap — free)
+2. Driving time via OSRM (free routing engine)
+3. Transit estimate: `driving_time × 1.8 + 12 min`
 
 **Home location:** Nuss-Anger 8, 85591 Vaterstetten, Germany
 
 ### Output
-
-New row in Google Sheets with all extracted fields.
+New or updated row in `activities` (SQLite), via `data_service.save_or_update_activity()` → `db_service`.
 
 ---
 
 ## Step 5 (Manual): Distance Backfill (`run_distance_for_all.py`)
 
-**Purpose:** Calculate/recalculate distance for all activities with addresses.
+Calculate/recalculate distance for all activities with addresses.
 
-**Run:** `python run_distance_for_all.py` (default: only missing) or `python run_distance_for_all.py --force` (all)
+`python run_distance_for_all.py` (missing only) or `--force` (all).
 
 ---
 
@@ -162,36 +144,36 @@ New row in Google Sheets with all extracted fields.
 
 | File | Purpose | Status |
 |------|---------|--------|
-| `data/all-urls.json` | URL database with alive/contentType metadata | **Active** — updated by pipeline |
+| `data/activities.db` | SQLite database — source of truth for activities | **Active** |
+| `data/all-urls.json` | URL candidate database with alive/contentType metadata | **Active** — updated by pipeline |
 | `data/serp/query.json` | Latest SERP search results | **Active** — overwritten each run |
 | `data/serp/last-serp-requests.json` | SERP run metadata | **Active** |
-| `data/data.json` | Legacy activity data | **Deprecated** — Google Sheets is now the source of truth; still read by bot.py for backward compat |
+
+The DB path can be overridden via the `KINDER_DB_PATH` env var (useful for deployment).
 
 ---
 
-## Google Sheets Schema
+## Activities Schema (SQLite)
 
-**Columns (A-O):**
-
-| Col | Field | Type | Example |
-|-----|-------|------|---------|
-| A | url | string | `https://kinderkunsthaus.de/` |
-| B | shortName | string | `Kinderkunsthaus` |
-| C | alive | boolean | `true` |
-| D | lastUpdated | date | `2025-12-29` |
-| E | category | string | `arts-crafts` |
-| F | openHours | string | `Mon-Fri 9:00-18:00` |
-| G | address | string | `Römerstr. 21, 80801 München` |
-| H | services | JSON array | `["workshops", "open program"]` |
-| I | description | string | `A creative workshop for children...` |
-| J | userRating | int (1-5) | `4` |
-| K | drivingMinutes | int | `22` |
-| L | transitMinutes | int | `52` |
-| M | distanceKm | float | `20.9` |
-| N | userComment | string | `Great place` |
-| O | userRemoved | boolean | `true` |
-
-**Access:** Service account `kinder-activities-sheets@kinder-activities.iam.gserviceaccount.com` via gspread (Python) and googleapis (Node.js).
+```sql
+CREATE TABLE activities (
+  url             TEXT PRIMARY KEY,
+  shortName       TEXT NOT NULL DEFAULT '',
+  alive           INTEGER NOT NULL DEFAULT 1,    -- 0/1
+  lastUpdated     TEXT NOT NULL DEFAULT '',     -- ISO date
+  category        TEXT,
+  openHours       TEXT,
+  address         TEXT,
+  services        TEXT,                          -- JSON array string
+  description     TEXT,
+  userRating      INTEGER,                       -- 1..5
+  drivingMinutes  INTEGER,
+  transitMinutes  INTEGER,
+  distanceKm      REAL,
+  userComment     TEXT,
+  price           TEXT
+);
+```
 
 ---
 
@@ -199,24 +181,22 @@ New row in Google Sheets with all extracted fields.
 
 ### React App (`src/App.jsx`)
 
-1. On mount, calls `GET /.netlify/functions/activities`
-2. Netlify function reads Google Sheets, filters out `userRemoved` items, returns JSON
-3. User interactions write back to Google Sheets via Netlify functions:
-   - **Rate:** `PUT /.netlify/functions/update-rating`
-   - **Comment:** `PUT /.netlify/functions/update-comment`
-   - **Category:** `PUT /.netlify/functions/update-category`
-   - **Name:** `PUT /.netlify/functions/update-name`
-   - **Delete:** `DELETE /.netlify/functions/delete-activity` (sets `userRemoved=true`)
+1. On mount, calls `GET /api/activities`
+2. The Express API reads SQLite and returns the array as JSON
+3. User interactions write back via the API:
+   - **Rate:** `PUT /api/activities/rating`
+   - **Comment:** `PUT /api/activities/comment`
+   - **Category:** `PUT /api/activities/category`
+   - **Name:** `PUT /api/activities/name`
+   - **Delete:** `DELETE /api/activities` (hard delete)
 
-All Netlify functions use `netlify/lib/sheets.js` for Google Sheets auth and read/write.
+In dev, Vite proxies `/api/*` to `http://localhost:3002`. In production, any reverse proxy (nginx, Caddy) performs the same routing.
 
 ---
 
 ## Telegram Bot (`bot.py`)
 
-Alternative input method — submit a single URL for analysis on demand.
-
-Uses the same `analyser.py` → `crawler.py` + `llm_service.py` + `distance_from_home.py` pipeline, saves directly to Google Sheets.
+Alternative input method — submit a single URL for analysis on demand. Uses the same `analyser.py` → `crawler.py` + `llm_service.py` + `distance_from_home.py` pipeline, writes directly to SQLite via `data_service.save_or_update_activity()`.
 
 ---
 
@@ -233,17 +213,21 @@ run.py (orchestrator)
     │   ├── llm_service.py (OpenAI gpt-4o-mini)
     │   └── distance_from_home.py (OSRM + Nominatim)
     ├── data_service.py
-    │   └── sheets_service.py (Google Sheets API)
-    └── writes to Google Sheets
+    │   └── db_service.py (SQLite — sqlite3 stdlib)
+    └── writes to data/activities.db
 
 bot.py (Telegram bot)
 ├── analyser.py (same pipeline)
 ├── data_service.py
-└── writes to Google Sheets
+└── writes to data/activities.db
 
 run_distance_for_all.py (standalone)
 ├── distance_from_home.py
-└── updates Google Sheets
+└── updates data/activities.db
+
+node-server/server.js (Express API, :3002)
+└── node-server/db.js (SQLite — better-sqlite3)
+    └── reads/writes data/activities.db
 ```
 
 ---
@@ -252,15 +236,11 @@ run_distance_for_all.py (standalone)
 
 | Variable | Used By | Purpose |
 |----------|---------|---------|
-| `GOOGLE_SHEETS_ID` | Python + Netlify | Spreadsheet ID |
-| `GOOGLE_SERVICE_ACCOUNT_EMAIL` | Python + Netlify | Service account auth |
-| `GOOGLE_PRIVATE_KEY` | Python + Netlify | Service account auth |
+| `KINDER_DB_PATH` | Node + Python | Optional override for the SQLite DB path (absolute or repo-relative). Defaults to `data/activities.db` |
 | `OPENAI_API_KEY` | `llm_service.py` | LLM analysis |
 | `TELEGRAM_BOT_TOKEN` | `bot.py` | Telegram bot (optional) |
 
 SerpAPI key is hardcoded in `serp.py`.
-
-Alternative: place a `google-credentials.json` file for local development instead of env vars.
 
 ---
 
@@ -275,9 +255,9 @@ data/all-urls.json  (new URLs added)
     ↓  check-alive.py
 data/all-urls.json  (with alive + contentType)
     ↓  run_analyser_for_all_urls.py (crawl → LLM → distance)
-Google Sheets  (new activities added)
-    ↓  Netlify functions (sheets.js)
+data/activities.db  (new activities inserted)
+    ↓  Express API (/api/activities*)
 React Frontend  (display + edit)
-    ↓  User interactions (rate, comment, delete)
-Google Sheets  (updated)
+    ↓  User interactions (rate, comment, delete, rename, recategorize)
+data/activities.db  (updated)
 ```

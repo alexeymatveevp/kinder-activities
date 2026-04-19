@@ -2,169 +2,123 @@
 
 A tool to discover and catalogue kid-friendly activities in Munich and Bavaria. Combines Google search, web crawling, and LLM analysis.
 
-Deployed on **Netlify** with **Google Sheets** as the database.
+Self-hosted: a React frontend served by any static-file host, a small Express API (Node), and a local **SQLite** database.
 
 ## Quick Start
 
-### 1. Google Cloud Setup (Required)
+### 1. Install dependencies
 
-1. Go to [Google Cloud Console](https://console.cloud.google.com/)
-2. Create a new project or select an existing one
-3. Enable the **Google Sheets API**:
-   - Go to "APIs & Services" > "Library"
-   - Search for "Google Sheets API" and enable it
-4. Create a Service Account:
-   - Go to "APIs & Services" > "Credentials"
-   - Click "Create Credentials" > "Service Account"
-   - Give it a name (e.g., "kinder-activities-sheets")
-   - Click "Create and Continue", then "Done"
-5. Create a key for the service account:
-   - Click on the service account you just created
-   - Go to "Keys" tab > "Add Key" > "Create new key"
-   - Choose JSON and download the file
-6. Create a Google Sheet:
-   - Create a new Google Sheet at [sheets.google.com](https://sheets.google.com)
-   - Add the header row (Row 1):
-     ```
-     url | shortName | alive | lastUpdated | category | openHours | address | services | description | userRating | drivingMinutes | transitMinutes | distanceKm | userComment | userRemoved
-     ```
-   - Share the sheet with the service account email (found in the JSON file as `client_email`)
-   - Copy the Sheet ID from the URL: `https://docs.google.com/spreadsheets/d/SHEET_ID_HERE/edit`
-
-### 2. Credentials Setup
-
-**Option A (Recommended): Use credentials file**
-
-Copy your downloaded JSON key file to the project root:
 ```bash
-cp ~/Downloads/your-service-account-key.json google-credentials.json
+# Node deps (root + API server)
+npm install
+cd node-server && npm install && cd ..
+
+# Python deps (for the enrichment pipeline and Telegram bot)
+cd server && python -m venv venv && source venv/bin/activate && pip install -r requirements.txt && cd ..
 ```
 
-Then create `.env` with just the Sheet ID:
-```bash
-echo "GOOGLE_SHEETS_ID=your_spreadsheet_id_here" > .env
-```
+### 2. Configure environment
 
-**Option B: Use environment variables**
+Copy `env.example` to `.env` and fill in the keys you need:
 
-Copy `env.example` to `.env` and fill in your values:
 ```bash
 cp env.example .env
 ```
 
-Required environment variables:
-- `GOOGLE_SHEETS_ID` - The spreadsheet ID from the Google Sheet URL
-- `GOOGLE_SERVICE_ACCOUNT_EMAIL` - From the JSON key file (`client_email`)
-- `GOOGLE_PRIVATE_KEY` - From the JSON key file (`private_key`)
+All variables are optional:
 
-### 3. Install Dependencies
+| Variable | Purpose |
+|----------|---------|
+| `KINDER_DB_PATH` | Override SQLite DB location (absolute or repo-relative). Defaults to `data/activities.db` |
+| `OPENAI_API_KEY` | Required for LLM analysis (`analyse`, `analyse-all`, `bot`) |
+| `TELEGRAM_BOT_TOKEN` | Required for `npm run bot` |
 
-```bash
-# Install Node.js dependencies
-npm install
-
-# Install Python dependencies (for local scripts)
-cd server && python -m venv venv && source venv/bin/activate && pip install -r requirements.txt
-```
-
-### 4. Migrate Existing Data (One-time)
-
-If you have existing data in `data/data.json`, run the migration script:
+### 3. Run locally
 
 ```bash
-npm run migrate-to-sheets
+# Starts both the Express API (:3002) and the Vite dev server
+npm run dev:all
 ```
 
-### 5. Local Development
+Open http://localhost:5173.
 
-```bash
-# Install Netlify CLI globally (if not already installed)
-npm install -g netlify-cli
+On first run, the SQLite file is created automatically at `data/activities.db` with the empty schema. Populate it via the enrichment pipeline (`npm run run`) or the Telegram bot.
 
-# Start the development server (frontend + functions)
-npm run dev:netlify
-```
+## Deployment (self-host)
 
-This starts:
-- Vite dev server for the React frontend
-- Netlify Functions for the API
+A minimal deployment on any Linux VPS:
 
-## Deployment to Netlify
-
-1. Push your code to GitHub
-2. Connect the repository to Netlify
-3. Set environment variables in Netlify dashboard:
-   - `GOOGLE_SHEETS_ID`
-   - `GOOGLE_SERVICE_ACCOUNT_EMAIL`
-   - `GOOGLE_PRIVATE_KEY`
-4. Deploy!
+1. Copy the repo to the server (git clone or rsync).
+2. `npm install` at the root and in `node-server/`.
+3. `npm run build` — outputs static files to `dist/`.
+4. Copy your local `data/activities.db` to the server (or let it start empty).
+5. Set `KINDER_DB_PATH` in `.env` if the DB lives outside the repo.
+6. Run the API server as a long-lived process (systemd, pm2, etc.):
+   ```bash
+   node node-server/server.js   # listens on :3002
+   ```
+7. Configure a reverse proxy (nginx / Caddy) to serve `dist/` as static files and proxy `/api/*` → `http://localhost:3002`.
 
 ## Scripts
 
 | Command | Description |
 |---------|-------------|
-| `npm run dev:netlify` | Start local dev with Netlify Functions |
-| `npm run dev` | Start Vite frontend only |
-| `npm run build` | Build for production |
-| `npm run migrate-to-sheets` | Migrate data.json to Google Sheets |
+| `npm run dev:all` | Start API server + Vite frontend together |
+| `npm run dev` | Vite frontend only |
+| `npm run server` | Express API server only (:3002) |
+| `npm run build` | Build the frontend for production |
+| `npm run preview` | Preview a production build locally |
 
-### Local-Only Scripts (Data Enrichment)
+### Data enrichment (Python)
 
-These scripts run locally and write directly to Google Sheets:
+All enrichment scripts write directly to SQLite via `server/db_service.py`.
 
 | Command | Description |
 |---------|-------------|
-| `npm run run` | **Full pipeline** - runs all steps below in order |
+| `npm run run` | **Full pipeline** — runs all steps below in order |
 | `npm run search` | Search Google for new activity URLs |
-| `npm run merge-serp` | Merge search results into `all-urls.json` |
+| `npm run merge-serp` | Merge search results into `data/all-urls.json` |
 | `npm run check-alive` | Check URL availability & content types |
-| `npm run analyse-all` | Analyse new URLs with LLM, save to Google Sheets |
+| `npm run analyse-all` | Analyse new URLs with the LLM, save to SQLite |
 | `npm run analyse <url>` | Analyse a single URL |
 | `npm run crawl <url>` | Debug: show raw crawler output |
-| `npm run bot` | Start Telegram bot |
+| `npm run bot` | Start the Telegram bot |
 
 ## Data Files
 
-### Google Sheets (Synced)
-- Activities with full details (replaces `data/data.json`)
-
-### Local Only
-- `data/all-urls.json` - All discovered URLs with status
-- `data/serp/` - Raw Google search results
+| Path | Purpose |
+|------|---------|
+| `data/activities.db` | SQLite database (source of truth) |
+| `data/all-urls.json` | All discovered URLs with status |
+| `data/serp/` | Raw Google search results |
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    Netlify (Cloud)                       │
-│  ┌─────────────────┐    ┌────────────────────────────┐  │
-│  │  React Frontend │───▶│    Netlify Functions       │  │
-│  │    (Vite)       │    │  (API: CRUD operations)    │  │
-│  └─────────────────┘    └────────────────────────────┘  │
-└─────────────────────────────────────────────────────────┘
-                                  │
-                                  ▼
-                    ┌─────────────────────────┐
-                    │     Google Sheets       │
-                    │    (Database)           │
-                    └─────────────────────────┘
-                                  ▲
-                                  │
-┌─────────────────────────────────────────────────────────┐
-│                    Local Machine                         │
-│  ┌─────────────────┐    ┌────────────────────────────┐  │
-│  │  Python Scripts │───▶│    all-urls.json           │  │
-│  │  (Enrichment)   │    │    serp/*.json             │  │
-│  └─────────────────┘    └────────────────────────────┘  │
-└─────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                          Browser                              │
+│                    React frontend (Vite)                      │
+└──────────────────────────┬───────────────────────────────────┘
+                           │  /api/*
+                           ▼
+┌──────────────────────────────────────────────────────────────┐
+│            Express API (node-server/server.js :3002)          │
+│                  better-sqlite3 → activities.db               │
+└──────────────────────────┬───────────────────────────────────┘
+                           │
+                           ▼
+               ┌───────────────────────┐
+               │   data/activities.db  │ ◀──── Python enrichment
+               │       (SQLite)        │       (serp → crawl → LLM)
+               └───────────────────────┘ ◀──── Telegram bot (bot.py)
 ```
+
+See [DATA_FLOW.md](DATA_FLOW.md) for the full pipeline and schema.
 
 ## Environment Variables
 
 | Variable | Description |
 |----------|-------------|
-| `GOOGLE_SHEETS_ID` | Google Sheet ID from URL |
-| `GOOGLE_SERVICE_ACCOUNT_EMAIL` | Service account email |
-| `GOOGLE_PRIVATE_KEY` | Service account private key |
-| `TELEGRAM_BOT_TOKEN` | Telegram bot token (optional) |
-| `OPENAI_API_KEY` | OpenAI API key (for analysis) |
+| `KINDER_DB_PATH` | Optional SQLite path override |
+| `OPENAI_API_KEY` | OpenAI API key (required for LLM analysis) |
+| `TELEGRAM_BOT_TOKEN` | Telegram bot token (required for `npm run bot`) |

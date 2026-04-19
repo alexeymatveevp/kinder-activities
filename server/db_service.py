@@ -6,8 +6,18 @@ from datetime import date
 from pathlib import Path
 from typing import Optional
 
+from dotenv import load_dotenv
+
 _REPO_ROOT = Path(__file__).resolve().parent.parent
-_DB_PATH = _REPO_ROOT / 'data' / 'activities.db'
+load_dotenv(_REPO_ROOT / '.env')
+
+_env_db_path = os.getenv('KINDER_DB_PATH')
+if _env_db_path:
+    _DB_PATH = Path(_env_db_path)
+    if not _DB_PATH.is_absolute():
+        _DB_PATH = (_REPO_ROOT / _DB_PATH).resolve()
+else:
+    _DB_PATH = _REPO_ROOT / 'data' / 'activities.db'
 
 HEADER_ROW = [
     'url', 'shortName', 'alive', 'lastUpdated', 'category', 'openHours',
