@@ -1,8 +1,7 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react'
 import './App.css'
 
-// API base URL - uses relative path for Netlify, works with both local dev and production
-const API_BASE = '/.netlify/functions'
+const API_BASE = '/api'
 
 const CATEGORY_LABELS = {
   all: 'All',
@@ -685,7 +684,7 @@ function App() {
 
   const handleRatingChange = useCallback(async (url, rating) => {
     try {
-      const response = await fetch(`${API_BASE}/update-rating`, {
+      const response = await fetch(`${API_BASE}/activities/rating`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url, rating })
@@ -709,7 +708,7 @@ function App() {
 
   const handleRemove = useCallback(async (url) => {
     try {
-      const response = await fetch(`${API_BASE}/delete-activity`, {
+      const response = await fetch(`${API_BASE}/activities`, {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url })
@@ -729,7 +728,7 @@ function App() {
 
   const handleCategoryChange = useCallback(async (url, category) => {
     try {
-      const response = await fetch(`${API_BASE}/update-category`, {
+      const response = await fetch(`${API_BASE}/activities/category`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url, category })
@@ -753,7 +752,7 @@ function App() {
 
   const handleCommentChange = useCallback(async (url, comment) => {
     try {
-      const response = await fetch(`${API_BASE}/update-comment`, {
+      const response = await fetch(`${API_BASE}/activities/comment`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url, comment })
@@ -777,7 +776,7 @@ function App() {
 
   const handleNameChange = useCallback(async (url, name) => {
     try {
-      const response = await fetch(`${API_BASE}/update-name`, {
+      const response = await fetch(`${API_BASE}/activities/name`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url, name })

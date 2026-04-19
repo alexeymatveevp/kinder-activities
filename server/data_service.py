@@ -1,20 +1,20 @@
 """
-Data service for managing activities in Google Sheets.
+Data service for managing activities.
 
-This module provides a compatibility layer that maintains the same interface
-as the original file-based data_service, but uses Google Sheets as the backend.
+Thin wrapper over db_service (SQLite). Kept as a compatibility layer so callers
+don't need to change their import paths.
 """
 from typing import TypedDict, Optional
 from urllib.parse import urlparse
 
-# Import Google Sheets service
-from sheets_service import (
+from db_service import (
     load_all_activities,
     get_activity_by_url,
     save_or_update_activity as sheets_save_or_update,
     update_activity,
     add_activity,
     ensure_header_row,
+    format_prices_text,
 )
 
 
@@ -39,6 +39,7 @@ class Activity(TypedDict, total=False):
     transitMinutes: Optional[int]
     distanceKm: Optional[float]
     userComment: Optional[str]
+    price: Optional[str]
 
 
 def normalize_url(url: str) -> str:
@@ -52,26 +53,15 @@ def normalize_url(url: str) -> str:
 
 
 def load_activities() -> list[Activity]:
-    """Load all activities from Google Sheets."""
     try:
-        return load_all_activities(include_removed=False)
+        return load_all_activities()
     except Exception as e:
-        print(f"Error loading activities from Google Sheets: {e}")
+        print(f"Error loading activities: {e}")
         return []
 
 
 def save_activities(activities: list[Activity]) -> None:
-    """
-    Save activities array to Google Sheets.
-    
-    Note: This method is less efficient than individual updates.
-    Consider using save_or_update_activity for single activity operations.
-    """
-    # Ensure header row exists
     ensure_header_row()
-    
-    # For bulk operations, we'd need to clear and re-add all data
-    # This is not recommended for large datasets
     for activity in activities:
         try:
             sheets_save_or_update(activity)
@@ -86,15 +76,10 @@ def is_duplicate(url: str) -> bool:
 
 
 def save_or_update_activity(activity: Activity) -> tuple[bool, Activity, bool]:
-    """
-    Save or update an activity in Google Sheets.
-    Returns (success, activity, is_update)
-    """
+    """Save or update an activity. Returns (success, activity, is_update)."""
     try:
-        # Ensure required fields
         if 'alive' not in activity:
             activity['alive'] = True
-        
         return sheets_save_or_update(activity)
     except Exception as e:
         print(f"Error saving activity: {e}")

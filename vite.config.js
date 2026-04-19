@@ -39,16 +39,15 @@ export default defineConfig({
         ],
       },
       workbox: {
-        // Cache API responses for offline use
         runtimeCaching: [
           {
-            urlPattern: /^https:\/\/.*\.netlify\.app\/\.netlify\/functions\/.*/i,
+            urlPattern: ({ url }) => url.pathname.startsWith('/api/'),
             handler: 'NetworkFirst',
             options: {
               cacheName: 'api-cache',
               expiration: {
                 maxEntries: 50,
-                maxAgeSeconds: 60 * 60 * 24, // 24 hours
+                maxAgeSeconds: 60 * 60 * 24,
               },
               cacheableResponse: {
                 statuses: [0, 200],
@@ -62,7 +61,7 @@ export default defineConfig({
               cacheName: 'google-fonts-cache',
               expiration: {
                 maxEntries: 10,
-                maxAgeSeconds: 60 * 60 * 24 * 365, // 1 year
+                maxAgeSeconds: 60 * 60 * 24 * 365,
               },
             },
           },
@@ -71,11 +70,10 @@ export default defineConfig({
     }),
   ],
   server: {
-    host: true, // Expose on network for mobile testing
+    host: true,
     proxy: {
-      // Proxy API requests to Netlify CLI dev server during local development
-      '/.netlify/functions': {
-        target: 'http://localhost:8888',
+      '/api': {
+        target: 'http://localhost:3002',
         changeOrigin: true,
       },
     },

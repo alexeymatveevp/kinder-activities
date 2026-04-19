@@ -17,7 +17,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from analyser import analyse_url
-from data_service import load_activities, save_activities, normalize_url
+from data_service import load_activities, save_or_update_activity, normalize_url
+from db_service import format_prices_text
 
 # Paths
 SCRIPT_DIR = Path(__file__).parent
@@ -39,47 +40,39 @@ def get_urls_to_analyse() -> list[dict]:
     - NOT present in data.json
     - contentType == "website"
     - alive == True
-    - userRemoved != True (skip user-removed items)
     """
     all_urls = load_all_urls()
     existing_activities = load_activities()
-    
-    # Get normalized URLs from data.json
+
+    # Get normalized URLs from Google Sheets
     existing_normalized = {normalize_url(a["url"]) for a in existing_activities}
-    
+
     # Filter URLs to analyse
     urls_to_analyse = []
     for entry in all_urls:
         url = entry.get("url", "")
         content_type = entry.get("contentType", "unknown")
         alive = entry.get("alive", False)
-        user_removed = entry.get("userRemoved", False)
-        
-        # Skip if user has removed this item
-        if user_removed:
-            continue
-        
+
         # Skip if not a website
         if content_type != "website":
             continue
-        
+
         # Skip if not alive
         if not alive:
             continue
-        
-        # Skip if already in data.json
+
+        # Skip if already in Google Sheets
         if normalize_url(url) in existing_normalized:
             continue
-        
+
         urls_to_analyse.append(entry)
     
     return urls_to_analyse
 
 
 def save_analysis_result(result, url_entry: dict) -> None:
-    """Save the analysis result to data.json"""
-    activities = load_activities()
-    
+    """Save the analysis result to Google Sheets."""
     # Create new activity entry
     new_activity = {
         "url": result.url,
@@ -87,7 +80,7 @@ def save_analysis_result(result, url_entry: dict) -> None:
         "alive": result.available,
         "lastUpdated": date.today().isoformat(),
     }
-    
+
     # Add optional fields if available
     if result.category:
         new_activity["category"] = result.category
@@ -96,7 +89,7 @@ def save_analysis_result(result, url_entry: dict) -> None:
     if result.address:
         new_activity["address"] = result.address
     if result.prices:
-        new_activity["prices"] = result.prices
+        new_activity["price"] = format_prices_text(result.prices)
     if result.services:
         new_activity["services"] = result.services
     if result.description:
@@ -110,9 +103,9 @@ def save_analysis_result(result, url_entry: dict) -> None:
         new_activity["transitMinutes"] = result.transit_minutes
     if result.distance_km is not None:
         new_activity["distanceKm"] = result.distance_km
-    
-    activities.append(new_activity)
-    save_activities(activities)
+
+    # Save only this single activity instead of rewriting all
+    save_or_update_activity(new_activity)
 
 
 def mark_as_visited(url: str) -> None:
@@ -159,9 +152,9 @@ async def run_analysis_batch(urls_to_analyse: list[dict], batch_size: int = 5) -
             error_count += 1
             print(f"  ❌ Error: {e}")
         
-        # Small delay between requests to be nice to servers
+        # Delay between requests to be nice to servers and avoid Sheets API rate limits
         if i < total:
-            await asyncio.sleep(2)
+            await asyncio.sleep(5)
     
     print("\n" + "=" * 60)
     print("SUMMARY")

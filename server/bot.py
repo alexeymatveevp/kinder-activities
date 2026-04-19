@@ -21,7 +21,8 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
 from analyser import analyse_url, CrawlResult
-from data_service import normalize_url, load_activities, save_activities
+from data_service import normalize_url, save_or_update_activity
+from db_service import format_prices_text
 
 # Load environment variables
 load_dotenv()
@@ -173,22 +174,10 @@ async def check_url_alive(url: str) -> tuple[bool, str]:
 # ============================================================
 
 def save_analysis_to_data(result: CrawlResult) -> bool:
-    """Save analysis result to data.json. Returns True if successful."""
-    activities = load_activities()
-    
-    # Check if already exists
-    normalized = normalize_url(result.url)
-    for i, activity in enumerate(activities):
-        if normalize_url(activity.get("url", "")) == normalized:
-            # Update existing
-            activities[i] = build_activity_dict(result)
-            save_activities(activities)
-            return True
-    
-    # Add new
-    activities.append(build_activity_dict(result))
-    save_activities(activities)
-    return True
+    """Save analysis result to Google Sheets. Returns True if successful."""
+    activity = build_activity_dict(result)
+    success, _, _ = save_or_update_activity(activity)
+    return success
 
 
 def build_activity_dict(result: CrawlResult) -> dict:
@@ -207,7 +196,7 @@ def build_activity_dict(result: CrawlResult) -> dict:
     if result.address:
         activity["address"] = result.address
     if result.prices:
-        activity["prices"] = result.prices
+        activity["price"] = format_prices_text(result.prices)
     if result.services:
         activity["services"] = result.services
     if result.description:

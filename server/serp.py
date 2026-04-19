@@ -33,9 +33,9 @@ EXTRA_FILTERS = [
 ]
 
 SITE_FILTERS = [
-    "site:.de",
+    #"site:.de",
     # "site:.bayern",
-    "site:.muenchen.de",
+    #"site:.muenchen.de",
     ""
 ]
 
