@@ -27,10 +27,12 @@ class Activity(TypedDict, total=False):
     url: str
     shortName: str
     alive: bool
+    createdAt: str
     lastUpdated: str
     category: Optional[str]
     openHours: Optional[str]
     address: Optional[str]
+    googleMapsLink: Optional[str]
     prices: Optional[list[PriceInfo]]
     services: Optional[list[str]]
     description: Optional[str]

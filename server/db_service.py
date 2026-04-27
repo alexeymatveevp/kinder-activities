@@ -20,15 +20,19 @@ else:
     _DB_PATH = _REPO_ROOT / 'data' / 'activities.db'
 
 HEADER_ROW = [
-    'url', 'shortName', 'alive', 'lastUpdated', 'category', 'openHours',
-    'address', 'services', 'description', 'userRating', 'drivingMinutes',
+    'url', 'shortName', 'alive', 'createdAt', 'lastUpdated', 'category', 'openHours',
+    'address', 'googleMapsLink', 'services', 'description', 'userRating', 'drivingMinutes',
     'transitMinutes', 'distanceKm', 'userComment', 'price',
 ]
 
 COLUMNS = {name: i for i, name in enumerate(HEADER_ROW)}
 
+# createdAt must only be written on creation; never updated through the
+# field-update path.
+_NON_UPDATABLE_COLUMNS = frozenset({'url', 'createdAt'})
+
 _OPTIONAL_STRING_FIELDS = {
-    'category', 'openHours', 'address', 'description', 'userComment', 'price',
+    'category', 'openHours', 'address', 'googleMapsLink', 'description', 'userComment', 'price',
 }
 
 _conn: Optional[sqlite3.Connection] = None
@@ -49,10 +53,12 @@ def _get_conn() -> sqlite3.Connection:
             url             TEXT PRIMARY KEY,
             shortName       TEXT NOT NULL DEFAULT '',
             alive           INTEGER NOT NULL DEFAULT 1,
+            createdAt       TEXT NOT NULL DEFAULT '',
             lastUpdated     TEXT NOT NULL DEFAULT '',
             category        TEXT,
             openHours       TEXT,
             address         TEXT,
+            googleMapsLink  TEXT,
             services        TEXT,
             description     TEXT,
             userRating      INTEGER,
@@ -63,6 +69,19 @@ def _get_conn() -> sqlite3.Connection:
             price           TEXT
         )
     ''')
+
+    # Migrations — idempotent; safe on every connection.
+    existing_cols = {row[1] for row in conn.execute("PRAGMA table_info('activities')")}
+
+    # createdAt: backfill from lastUpdated for pre-existing rows.
+    if 'createdAt' not in existing_cols:
+        conn.execute("ALTER TABLE activities ADD COLUMN createdAt TEXT NOT NULL DEFAULT ''")
+        conn.execute("UPDATE activities SET createdAt = lastUpdated WHERE createdAt = ''")
+
+    # googleMapsLink: nullable; defaults to NULL for existing rows.
+    if 'googleMapsLink' not in existing_cols:
+        conn.execute("ALTER TABLE activities ADD COLUMN googleMapsLink TEXT")
+
     conn.commit()
     _conn = conn
     return conn
@@ -84,6 +103,7 @@ def _row_to_activity(row: sqlite3.Row) -> Optional[dict]:
         'url': row['url'],
         'shortName': row['shortName'] or '',
         'alive': bool(row['alive']),
+        'createdAt': row['createdAt'] or '',
         'lastUpdated': row['lastUpdated'] or '',
     }
 
@@ -124,14 +144,22 @@ def _activity_to_params(activity: dict) -> dict:
         v = activity.get(key)
         return v if v not in (None, '') else None
 
+    last_updated = activity.get('lastUpdated') or date.today().isoformat()
+    # createdAt is filled here only as the desired value for *new* rows.
+    # add_activity() will override this with the existing row's createdAt
+    # if the URL is already known, so re-imports never overwrite it.
+    created_at = activity.get('createdAt') or last_updated
+
     return {
         'url': activity.get('url', ''),
         'shortName': activity.get('shortName', '') or '',
         'alive': 0 if activity.get('alive') is False else 1,
-        'lastUpdated': activity.get('lastUpdated') or date.today().isoformat(),
+        'createdAt': created_at,
+        'lastUpdated': last_updated,
         'category': opt('category'),
         'openHours': opt('openHours'),
         'address': opt('address'),
+        'googleMapsLink': opt('googleMapsLink'),
         'services': services_value,
         'description': opt('description'),
         'userRating': activity.get('userRating'),
@@ -158,14 +186,24 @@ def get_activity_by_url(url: str) -> Optional[dict]:
 def add_activity(activity: dict) -> dict:
     conn = _get_conn()
     params = _activity_to_params(activity)
+
+    # INSERT OR REPLACE deletes and re-inserts, so we must preserve the
+    # existing createdAt when the URL is already known. createdAt is only
+    # written on creation.
+    existing = conn.execute(
+        'SELECT createdAt FROM activities WHERE url = ?', (params['url'],)
+    ).fetchone()
+    if existing and existing['createdAt']:
+        params['createdAt'] = existing['createdAt']
+
     conn.execute(
         '''INSERT OR REPLACE INTO activities (
-            url, shortName, alive, lastUpdated, category, openHours, address,
-            services, description, userRating, drivingMinutes, transitMinutes,
+            url, shortName, alive, createdAt, lastUpdated, category, openHours, address,
+            googleMapsLink, services, description, userRating, drivingMinutes, transitMinutes,
             distanceKm, userComment, price
         ) VALUES (
-            :url, :shortName, :alive, :lastUpdated, :category, :openHours, :address,
-            :services, :description, :userRating, :drivingMinutes, :transitMinutes,
+            :url, :shortName, :alive, :createdAt, :lastUpdated, :category, :openHours, :address,
+            :googleMapsLink, :services, :description, :userRating, :drivingMinutes, :transitMinutes,
             :distanceKm, :userComment, :price
         )''',
         params,
@@ -173,6 +211,8 @@ def add_activity(activity: dict) -> dict:
     conn.commit()
     if 'lastUpdated' not in activity:
         activity['lastUpdated'] = params['lastUpdated']
+    if 'createdAt' not in activity:
+        activity['createdAt'] = params['createdAt']
     return activity
 
 
@@ -186,7 +226,7 @@ def update_activity(url: str, updates: dict) -> Optional[dict]:
 
 
 def update_activity_field(url: str, field: str, value) -> Optional[dict]:
-    if field not in COLUMNS or field == 'url':
+    if field not in COLUMNS or field in _NON_UPDATABLE_COLUMNS:
         raise ValueError(f"Unknown or non-updatable field: {field}")
 
     conn = _get_conn()

@@ -14,7 +14,8 @@ import json
 import aiohttp
 from pathlib import Path
 from datetime import date
-from urllib.parse import quote
+from typing import Optional
+from urllib.parse import quote, urlparse
 
 from dotenv import load_dotenv
 from telegram import Update
@@ -50,14 +51,86 @@ USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36
 
 
 def extract_urls(text: str) -> list[str]:
-    """Extract URLs from text"""
-    matches = URL_REGEX.findall(text)
-    return list(set(matches))
+    """Extract URLs from text. Preserves order, drops duplicates."""
+    seen = set()
+    out = []
+    for match in URL_REGEX.findall(text):
+        if match not in seen:
+            seen.add(match)
+            out.append(match)
+    return out
 
 
 def get_google_maps_url(address: str) -> str:
     """Generate Google Maps URL from address"""
     return f"https://www.google.com/maps/search/?api=1&query={quote(address)}"
+
+
+def is_google_maps_url(url: str) -> bool:
+    """Heuristic: does this URL point to a Google Maps location?"""
+    try:
+        parsed = urlparse(url)
+        host = (parsed.hostname or '').lower()
+        path = (parsed.path or '').lower()
+    except Exception:
+        return False
+
+    if not host:
+        return False
+
+    # maps.google.com / maps.google.de / etc.
+    if host.startswith('maps.google.'):
+        return True
+    # Mobile / share short links
+    if host == 'maps.app.goo.gl':
+        return True
+    # Long form: google.com/maps/...
+    if (host == 'google.com' or host.endswith('.google.com')) and path.startswith('/maps'):
+        return True
+    # Legacy short link
+    if host == 'goo.gl' and path.startswith('/maps'):
+        return True
+    return False
+
+
+def split_activity_and_maps_urls(urls: list[str]) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    """
+    Given the URLs found in a message, return (activity_url, google_maps_link, error).
+
+    Rules:
+      0 URLs -> error
+      1 URL  -> activity URL only (must not itself be a maps URL)
+      2 URLs -> exactly one must be a maps URL; the other becomes the activity URL
+      3+     -> error
+    """
+    if len(urls) == 0:
+        return None, None, "no URL found"
+
+    if len(urls) == 1:
+        only = urls[0]
+        if is_google_maps_url(only):
+            return None, None, (
+                "I got a Google Maps link but no activity URL. "
+                "Please send the activity URL too."
+            )
+        return only, None, None
+
+    if len(urls) == 2:
+        a, b = urls
+        a_is_maps = is_google_maps_url(a)
+        b_is_maps = is_google_maps_url(b)
+        if a_is_maps and not b_is_maps:
+            return b, a, None
+        if b_is_maps and not a_is_maps:
+            return a, b, None
+        if a_is_maps and b_is_maps:
+            return None, None, "both URLs look like Google Maps links — I need an activity URL too."
+        return None, None, (
+            "I got two URLs but neither looks like a Google Maps link. "
+            "Send one activity URL, or one activity URL plus one Google Maps URL."
+        )
+
+    return None, None, "I can only handle one activity URL (with an optional Google Maps URL) at a time."
 
 
 # ============================================================
@@ -173,14 +246,14 @@ async def check_url_alive(url: str) -> tuple[bool, str]:
 # Save to data.json (like run_analyser_for_all_urls.py)
 # ============================================================
 
-def save_analysis_to_data(result: CrawlResult) -> bool:
-    """Save analysis result to Google Sheets. Returns True if successful."""
-    activity = build_activity_dict(result)
+def save_analysis_to_data(result: CrawlResult, google_maps_link: Optional[str] = None) -> bool:
+    """Save analysis result to DB. Returns True if successful."""
+    activity = build_activity_dict(result, google_maps_link=google_maps_link)
     success, _, _ = save_or_update_activity(activity)
     return success
 
 
-def build_activity_dict(result: CrawlResult) -> dict:
+def build_activity_dict(result: CrawlResult, google_maps_link: Optional[str] = None) -> dict:
     """Build activity dict from CrawlResult (matches run_analyser_for_all_urls.py)"""
     activity = {
         "url": result.url,
@@ -188,13 +261,15 @@ def build_activity_dict(result: CrawlResult) -> dict:
         "alive": result.available,
         "lastUpdated": date.today().isoformat(),
     }
-    
+
     if result.category:
         activity["category"] = result.category
     if result.open_hours:
         activity["openHours"] = result.open_hours
     if result.address:
         activity["address"] = result.address
+    if google_maps_link:
+        activity["googleMapsLink"] = google_maps_link
     if result.prices:
         activity["price"] = format_prices_text(result.prices)
     if result.services:
@@ -209,7 +284,7 @@ def build_activity_dict(result: CrawlResult) -> dict:
         activity["transitMinutes"] = result.transit_minutes
     if result.distance_km is not None:
         activity["distanceKm"] = result.distance_km
-    
+
     return activity
 
 
@@ -217,7 +292,7 @@ def build_activity_dict(result: CrawlResult) -> dict:
 # Telegram message formatting
 # ============================================================
 
-def format_analysis_result(result: CrawlResult) -> str:
+def format_analysis_result(result: CrawlResult, google_maps_link: Optional[str] = None) -> str:
     """Format analysis result for Telegram message"""
     if not result.available:
         return (
@@ -228,11 +303,14 @@ def format_analysis_result(result: CrawlResult) -> str:
         )
 
     message = "✅ *Analysis Complete!*\n\n"
-    
+
     if result.short_name:
         message += f"📛 *Name:* {result.short_name}\n"
-    
+
     message += f"🔗 *URL:* {result.url}\n"
+
+    if google_maps_link:
+        message += f"🗺️ *Google Maps:* {google_maps_link}\n"
 
     if result.description:
         message += f"📝 *Description:* {result.description}\n"
@@ -241,7 +319,7 @@ def format_analysis_result(result: CrawlResult) -> str:
         message += f"🏷️ *Category:* {result.category}\n"
 
     if result.address:
-        maps_url = get_google_maps_url(result.address)
+        maps_url = google_maps_link or get_google_maps_url(result.address)
         message += f"📍 *Address:* [{result.address}]({maps_url})\n"
 
     if result.open_hours:
@@ -281,7 +359,9 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         f"4️⃣ Calculate travel time from home\n"
         f"5️⃣ Save it to our activities database\n\n"
         f"Just paste a URL like:\n"
-        f"https://www.kindermuseum-muenchen.de"
+        f"https://www.kindermuseum-muenchen.de\n\n"
+        f"You can also paste a Google Maps link in the same message "
+        f"(any order) and I'll save it together with the activity."
     )
 
 
@@ -295,32 +375,48 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "• Extract: category, hours, address, prices, services\n"
         "• Calculate travel time from home\n"
         "• Save everything to the database\n\n"
+        "*Optional Google Maps link:*\n"
+        "Send the activity URL together with a Google Maps link "
+        "(in any order). The Maps link will be saved to the activity.\n\n"
         "*Commands:*\n"
         "/start - Welcome message\n"
         "/help - Show this help\n\n"
-        "*Example:*\n"
-        "Just send: https://www.wildpark-poing.de",
+        "*Example (1 URL):*\n"
+        "https://www.wildpark-poing.de\n\n"
+        "*Example (activity + maps):*\n"
+        "https://www.wildpark-poing.de https://maps.app.goo.gl/abc123",
         parse_mode="Markdown",
     )
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle incoming messages - main pipeline"""
+    """Handle incoming messages - main pipeline.
+
+    Accepts:
+      - 1 URL  -> activity URL
+      - 2 URLs -> one activity URL + one Google Maps URL (any order)
+    """
     message_text = update.message.text
     if not message_text:
         return
 
-    # Extract URLs from message
     urls = extract_urls(message_text)
 
     if not urls:
         await update.message.reply_text(
             "🔗 Please send me a URL to analyze.\n\n"
-            "Example: https://www.kindermuseum-muenchen.de"
+            "Example: https://www.kindermuseum-muenchen.de\n"
+            "Or send the activity URL together with a Google Maps link."
         )
         return
 
-    print(f"Received {len(urls)} URL(s) from {update.effective_user.first_name}")
+    activity_url, google_maps_link, error = split_activity_and_maps_urls(urls)
+    if error:
+        await update.message.reply_text(f"⚠️ {error}")
+        return
+
+    user_first = update.effective_user.first_name if update.effective_user else "user"
+    print(f"Received URL from {user_first}: activity={activity_url}, maps={google_maps_link}")
 
     # Check if OpenAI API key is set
     if not os.getenv("OPENAI_API_KEY"):
@@ -329,12 +425,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
         return
 
-    # Process each URL
-    for url in urls:
-        await process_url_pipeline(update, url)
+    await process_url_pipeline(update, activity_url, google_maps_link=google_maps_link)
 
 
-async def process_url_pipeline(update: Update, url: str) -> None:
+async def process_url_pipeline(update: Update, url: str, google_maps_link: Optional[str] = None) -> None:
     """
     Process a single URL through the full pipeline:
     1. Check if URL exists in all-urls.json
@@ -389,12 +483,12 @@ async def process_url_pipeline(update: Update, url: str) -> None:
             )
             return
         
-        # Step 5: Save to data.json
-        save_analysis_to_data(analysis)
-        
+        # Step 5: Save to DB (with optional Google Maps link supplied by user)
+        save_analysis_to_data(analysis, google_maps_link=google_maps_link)
+
         # Send result
         await status_msg.edit_text(
-            format_analysis_result(analysis),
+            format_analysis_result(analysis, google_maps_link=google_maps_link),
             parse_mode="Markdown",
             disable_web_page_preview=True,
         )

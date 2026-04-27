@@ -154,134 +154,179 @@ function CategorySelect({ category, allCategories, onChange }) {
   )
 }
 
-function EditableName({ name, url, onSave }) {
-  const [value, setValue] = useState(name || 'Unnamed Activity')
-  const debounceRef = useRef(null)
-  
-  // Sync value when name prop changes (switching between items)
-  useEffect(() => {
-    setValue(name || 'Unnamed Activity')
-  }, [name, url])
-  
-  const handleChange = (e) => {
-    const newValue = e.target.value
-    setValue(newValue)
-    
-    // Clear previous debounce
-    if (debounceRef.current) {
-      clearTimeout(debounceRef.current)
-    }
-    
-    // Debounce save
-    debounceRef.current = setTimeout(() => {
-      onSave(newValue)
-    }, 200)
-  }
-  
-  const handleKeyDown = (e) => {
-    if (e.key === 'Enter') {
-      e.target.blur()
-      // Save immediately on Enter
-      if (debounceRef.current) {
-        clearTimeout(debounceRef.current)
-      }
-      onSave(value)
-    }
-  }
-  
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      if (debounceRef.current) {
-        clearTimeout(debounceRef.current)
-      }
-    }
-  }, [])
-  
-  return (
-    <input
-      type="text"
-      className="editable-name"
-      value={value}
-      onChange={handleChange}
-      onKeyDown={handleKeyDown}
-      onClick={(e) => e.stopPropagation()}
-    />
-  )
-}
+function ActivityMenu({ activity, onDelete, onSetCategory, onOpenNote, onRemoveNote, onOpenName }) {
+  const [isOpen, setIsOpen] = useState(false)
+  const menuRef = useRef(null)
+  const hasNote = !!(activity.userComment && activity.userComment.trim())
 
-function UserComment({ comment, onSave }) {
-  const [isEditing, setIsEditing] = useState(false)
-  const [text, setText] = useState(comment || '')
-  
-  // Sync text state when comment prop changes (switching between items)
   useEffect(() => {
-    setText(comment || '')
-    setIsEditing(false)
-  }, [comment])
-  
-  const handleSave = () => {
-    onSave(text)
-    setIsEditing(false)
-  }
-  
-  const handleCancel = () => {
-    setText(comment || '')
-    setIsEditing(false)
-  }
-  
-  const handleKeyDown = (e) => {
-    if (e.key === 'Escape') handleCancel()
-    if (e.key === 'Enter' && e.ctrlKey) handleSave()
-  }
-  
-  if (isEditing) {
-    return (
-      <div className="user-comment editing" onClick={(e) => e.stopPropagation()}>
-        <textarea
-          className="comment-textarea"
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder="Add a note about this activity..."
-          autoFocus
-          rows={3}
-        />
-        <div className="comment-actions">
-          <button className="comment-save-btn" onClick={handleSave}>💾 Save</button>
-          <button className="comment-cancel-btn" onClick={handleCancel}>Cancel</button>
-          <span className="comment-hint">Ctrl+Enter to save, Esc to cancel</span>
-        </div>
-      </div>
-    )
-  }
-  
+    if (!isOpen) return
+    const handleClickOutside = (e) => {
+      if (menuRef.current && !menuRef.current.contains(e.target)) {
+        setIsOpen(false)
+      }
+    }
+    const handleKey = (e) => {
+      if (e.key === 'Escape') setIsOpen(false)
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    document.addEventListener('keydown', handleKey)
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+      document.removeEventListener('keydown', handleKey)
+    }
+  }, [isOpen])
+
+  const close = () => setIsOpen(false)
+
   return (
-    <div 
-      className={`user-comment ${comment ? 'has-comment' : 'empty'}`} 
-      onClick={(e) => {
-        e.stopPropagation()
-        setIsEditing(true)
-      }}
-    >
-      {comment ? (
-        <>
-          <span className="comment-icon">📝</span>
-          <span className="comment-text">{comment}</span>
-          <button className="comment-edit-btn" title="Edit note">✏️</button>
-        </>
-      ) : (
-        <button className="add-comment-btn">📝 Add note...</button>
+    <div className="activity-menu" ref={menuRef}>
+      <button
+        type="button"
+        className="activity-menu__trigger"
+        onClick={(e) => { e.stopPropagation(); setIsOpen((v) => !v) }}
+        aria-haspopup="menu"
+        aria-expanded={isOpen}
+        aria-label="More actions"
+        title="More actions"
+      >
+        ⋮
+      </button>
+      {isOpen && (
+        <div className="activity-menu__dropdown" role="menu">
+          <button type="button" className="activity-menu__item" role="menuitem" onClick={() => { close(); onOpenName() }}>
+            ✏️ Edit name
+          </button>
+          <div className="activity-menu__sep" />
+          {hasNote ? (
+            <>
+              <button type="button" className="activity-menu__item" role="menuitem" onClick={() => { close(); onOpenNote() }}>
+                ✏️ Edit note
+              </button>
+              <button type="button" className="activity-menu__item" role="menuitem" onClick={() => { close(); onRemoveNote() }}>
+                🗒️ Remove note
+              </button>
+            </>
+          ) : (
+            <button type="button" className="activity-menu__item" role="menuitem" onClick={() => { close(); onOpenNote() }}>
+              📝 Add note
+            </button>
+          )}
+          <button
+            type="button"
+            className="activity-menu__item"
+            role="menuitem"
+            onClick={() => { close(); onSetCategory('aggregator') }}
+          >
+            📑 Mark as aggregator
+          </button>
+          <button
+            type="button"
+            className="activity-menu__item"
+            role="menuitem"
+            onClick={() => { close(); onSetCategory('article') }}
+          >
+            📰 Mark as article
+          </button>
+          <div className="activity-menu__sep" />
+          <button
+            type="button"
+            className="activity-menu__item activity-menu__item--danger"
+            role="menuitem"
+            onClick={() => { close(); onDelete() }}
+          >
+            🗑️ Delete
+          </button>
+        </div>
       )}
     </div>
   )
 }
 
-function ActivityCard({ activity, onRatingChange, onRemove, onCategoryChange, onCommentChange, onNameChange, allCategories }) {
-  const googleMapsUrl = activity.address 
-    ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(activity.address)}`
-    : null
+function NoteModal({ activity, onSave, onClose }) {
+  const [text, setText] = useState(activity?.userComment || '')
 
+  if (!activity) return null
+
+  const handleSave = () => {
+    onSave(text)
+    onClose()
+  }
+
+  const handleKeyDown = (e) => {
+    if (e.key === 'Escape') onClose()
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) handleSave()
+  }
+
+  return (
+    <div className="note-modal__overlay" onClick={onClose}>
+      <div className="note-modal__dialog" onClick={(e) => e.stopPropagation()}>
+        <h3 className="note-modal__title">
+          {activity.userComment ? 'Edit note' : 'Add note'}
+        </h3>
+        <div className="note-modal__activity">{activity.shortName || activity.url}</div>
+        <textarea
+          className="note-modal__textarea"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder="Add a note about this activity..."
+          autoFocus
+          rows={5}
+        />
+        <div className="note-modal__actions">
+          <span className="note-modal__hint">Ctrl+Enter to save, Esc to cancel</span>
+          <button type="button" className="note-modal__cancel" onClick={onClose}>Cancel</button>
+          <button type="button" className="note-modal__save" onClick={handleSave}>Save</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function NameModal({ activity, onSave, onClose }) {
+  const [value, setValue] = useState(activity?.shortName || '')
+
+  if (!activity) return null
+
+  const handleSave = () => {
+    onSave(value.trim())
+    onClose()
+  }
+
+  const handleKeyDown = (e) => {
+    if (e.key === 'Escape') onClose()
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      handleSave()
+    }
+  }
+
+  return (
+    <div className="note-modal__overlay" onClick={onClose}>
+      <div className="note-modal__dialog" onClick={(e) => e.stopPropagation()}>
+        <h3 className="note-modal__title">Edit name</h3>
+        <div className="note-modal__activity">{activity.url}</div>
+        <input
+          type="text"
+          className="name-modal__input"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder="Activity name"
+          autoFocus
+        />
+        <div className="note-modal__actions">
+          <span className="note-modal__hint">Enter to save, Esc to cancel</span>
+          <button type="button" className="note-modal__cancel" onClick={onClose}>Cancel</button>
+          <button type="button" className="note-modal__save" onClick={handleSave}>Save</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ActivityCard({ activity, onRatingChange, onRemove, onCategoryChange, onCommentChange, onOpenNote, onOpenName, allCategories }) {
   const handleRemove = () => {
     onRemove(activity.url)
   }
@@ -290,157 +335,77 @@ function ActivityCard({ activity, onRatingChange, onRemove, onCategoryChange, on
     onCategoryChange(activity.url, newCategory)
   }
 
-  const handleNameChange = (newName) => {
-    onNameChange(activity.url, newName)
+  const handleRemoveNote = () => {
+    onCommentChange(activity.url, '')
+  }
+
+  const hasNote = !!(activity.userComment && activity.userComment.trim())
+
+  const handleRowClick = (e) => {
+    // Ignore clicks on inner interactive controls — they have their own behavior.
+    if (e.target.closest('button, input, select, textarea, a, label, [role="menu"]')) {
+      return
+    }
+    if (!activity.url) return
+    window.open(activity.url, '_blank', 'noopener,noreferrer')
+  }
+
+  const handleRowKeyDown = (e) => {
+    if (e.target !== e.currentTarget) return
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      if (activity.url) window.open(activity.url, '_blank', 'noopener,noreferrer')
+    }
   }
 
   return (
-    <article className="activity-card">
-      <div className="card-header">
-        <h3 className="card-title">
-          <EditableName 
-            name={activity.shortName} 
-            url={activity.url}
-            onSave={handleNameChange}
-          />
-        </h3>
-        <button className="remove-btn" onClick={handleRemove} title="Remove activity">
-          🗑️
-        </button>
+    <article
+      className="activity-list-item"
+      onClick={handleRowClick}
+      onKeyDown={handleRowKeyDown}
+      role={activity.url ? 'link' : undefined}
+      tabIndex={activity.url ? 0 : undefined}
+      title={activity.url ? `Open ${activity.url} in new tab` : undefined}
+    >
+      <div className="activity-list-item__name">
+        <span className="activity-list-item__name-text">
+          {activity.shortName || 'Unnamed Activity'}
+        </span>
       </div>
-      
-      <div className="card-category-row">
+
+      <StarRating
+        rating={activity.userRating}
+        onRate={(rating) => onRatingChange(activity.url, rating)}
+      />
+
+      <div className="activity-list-item__category">
         <CategorySelect
           category={activity.category}
           allCategories={allCategories}
           onChange={handleCategorySelect}
         />
       </div>
-      
-      <StarRating 
-        rating={activity.userRating} 
-        onRate={(rating) => onRatingChange(activity.url, rating)} 
-      />
-      
-      {activity.url && (
-        <div className="info-row url-row">
-          <a href={activity.url} target="_blank" rel="noopener noreferrer" className="card-url">
-            {activity.url}
-          </a>
-        </div>
-      )}
-      
-      <UserComment 
-        comment={activity.userComment}
-        onSave={(comment) => onCommentChange(activity.url, comment)}
-      />
-      
-      {activity.description && (
-        <p className="card-description">{activity.description}</p>
-      )}
-      
-      {activity.openHours && (
-        <div className="info-row">
-          <span className="icon">🕐</span>
-          <span>{activity.openHours}</span>
-        </div>
-      )}
-      
-      {activity.ageRange && (
-        <div className="info-row">
-          <span className="icon">👶</span>
-          <span className="age-range">{activity.ageRange}</span>
-        </div>
-      )}
-      
-      {activity.address && (
-        <div className="info-row">
-          <span className="icon">📍</span>
-          <a href={googleMapsUrl} target="_blank" rel="noopener noreferrer">
-            {activity.address}
-          </a>
-        </div>
-      )}
-      
-      {(activity.drivingMinutes || activity.transitMinutes) && (
-        <div className="info-row travel-time-row">
-          <div className="travel-times">
-            {activity.drivingMinutes && (
-              <span className="travel-time">
-                🚗 {activity.drivingMinutes < 60 
-                  ? `${activity.drivingMinutes} min` 
-                  : `${Math.floor(activity.drivingMinutes / 60)}h ${activity.drivingMinutes % 60}min`}
-              </span>
-            )}
-            {activity.transitMinutes && (
-              <span className="travel-time">
-                🚌 ~{activity.transitMinutes < 60 
-                  ? `${activity.transitMinutes} min` 
-                  : `${Math.floor(activity.transitMinutes / 60)}h ${activity.transitMinutes % 60}min`}
-              </span>
-            )}
-            {activity.distanceKm && (
-              <span className="travel-distance">{activity.distanceKm} km</span>
-            )}
-          </div>
-        </div>
-      )}
-      
-      {activity.services && activity.services.length > 0 && (
-        <div className="info-row">
-          <span className="icon">🎯</span>
-          <div className="services-list">
-            {activity.services.slice(0, 5).map((service, idx) => (
-              <span key={idx} className="service-tag">{service}</span>
-            ))}
-            {activity.services.length > 5 && (
-              <span className="service-tag">+{activity.services.length - 5} more</span>
-            )}
-          </div>
-        </div>
-      )}
-      
-      {activity.prices && activity.prices.length > 0 && (
-        <div className="info-row">
-          <span className="icon">💰</span>
-          <div className="prices-list">
-            {activity.prices.slice(0, 3).map((price, idx) => (
-              <div key={idx} className="price-item">
-                <span className="price-service">{price.service}</span>
-                <span className="price-value">{price.price}</span>
-              </div>
-            ))}
-            {activity.prices.length > 3 && (
-              <div className="price-item">
-                <span className="price-service">+ {activity.prices.length - 3} more prices</span>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-      
-      <div className="card-quick-actions">
-        <button 
-          className={`quick-action-btn ${activity.category === 'aggregator' ? 'active' : ''}`}
-          onClick={() => handleCategorySelect('aggregator')}
+
+      {hasNote && (
+        <button
+          type="button"
+          className="activity-list-item__note"
+          onClick={() => onOpenNote(activity)}
+          title="Click to edit note"
         >
-          📑 Mark as Aggregator
+          <span className="activity-list-item__note-icon" aria-hidden="true">📝</span>
+          <span className="activity-list-item__note-text">{activity.userComment}</span>
         </button>
-        <button 
-          className={`quick-action-btn ${activity.category === 'article' ? 'active' : ''}`}
-          onClick={() => handleCategorySelect('article')}
-        >
-          📰 Mark as Article
-        </button>
-      </div>
-      
-      <div className="card-footer">
-        <div className="status-alive">
-          <span className={`status-dot ${activity.alive ? '' : 'offline'}`}></span>
-          <span>{activity.alive ? 'Active' : 'Offline'}</span>
-        </div>
-        <span>Updated: {activity.lastUpdated}</span>
-      </div>
+      )}
+
+      <ActivityMenu
+        activity={activity}
+        onDelete={handleRemove}
+        onSetCategory={handleCategorySelect}
+        onOpenNote={() => onOpenNote(activity)}
+        onRemoveNote={handleRemoveNote}
+        onOpenName={() => onOpenName(activity)}
+      />
     </article>
   )
 }
@@ -472,8 +437,10 @@ function App() {
   const [activities, setActivities] = useState([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState(null)
-  const [activeCategory, setActiveCategory] = useState('unrated')
+  const [activeCategory, setActiveCategory] = useState('all')
   const [searchQuery, setSearchQuery] = useState('')
+  const [noteModalUrl, setNoteModalUrl] = useState(null)
+  const [nameModalUrl, setNameModalUrl] = useState(null)
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
   const [sidebarDragX, setSidebarDragX] = useState(null) // null = not dragging, number = current position
   const searchInputRef = useRef(null)
@@ -663,7 +630,7 @@ function App() {
     // Filter by search query
     if (searchQuery.trim()) {
       const query = searchQuery.toLowerCase()
-      result = result.filter(a => 
+      result = result.filter(a =>
         a.shortName?.toLowerCase().includes(query) ||
         a.description?.toLowerCase().includes(query) ||
         a.url?.toLowerCase().includes(query) ||
@@ -671,8 +638,13 @@ function App() {
         a.services?.some(s => s.toLowerCase().includes(query))
       )
     }
-    
-    return result
+
+    // Sort by createdAt descending (newest first). createdAt is an ISO date
+    // string (YYYY-MM-DD) so lexicographic compare matches chronological order.
+    // Empty createdAt sorts last.
+    return [...result].sort((a, b) =>
+      (b.createdAt || '').localeCompare(a.createdAt || '')
+    )
   }, [activities, activeCategory, searchQuery])
   
   const stats = useMemo(() => ({
@@ -774,6 +746,32 @@ function App() {
     }
   }, [])
 
+  const noteModalActivity = useMemo(
+    () => (noteModalUrl ? activities.find(a => a.url === noteModalUrl) : null) || null,
+    [noteModalUrl, activities]
+  )
+
+  const handleOpenNote = useCallback((activity) => {
+    setNoteModalUrl(activity.url)
+  }, [])
+
+  const handleCloseNote = useCallback(() => {
+    setNoteModalUrl(null)
+  }, [])
+
+  const nameModalActivity = useMemo(
+    () => (nameModalUrl ? activities.find(a => a.url === nameModalUrl) : null) || null,
+    [nameModalUrl, activities]
+  )
+
+  const handleOpenName = useCallback((activity) => {
+    setNameModalUrl(activity.url)
+  }, [])
+
+  const handleCloseName = useCallback(() => {
+    setNameModalUrl(null)
+  }, [])
+
   const handleNameChange = useCallback(async (url, name) => {
     try {
       const response = await fetch(`${API_BASE}/activities/name`, {
@@ -809,7 +807,7 @@ function App() {
         }
         
         // Reset filters and focus search
-        setActiveCategory('unrated')
+        setActiveCategory('all')
         setSearchQuery('')
         searchInputRef.current?.focus()
       }
@@ -955,16 +953,17 @@ function App() {
         </div>
         
         {filteredActivities.length > 0 ? (
-          <div className="activities-grid">
+          <div className="activities-list">
             {filteredActivities.map((activity, index) => (
-              <ActivityCard 
-                key={activity.url || index} 
-                activity={activity} 
+              <ActivityCard
+                key={activity.url || index}
+                activity={activity}
                 onRatingChange={handleRatingChange}
                 onRemove={handleRemove}
                 onCategoryChange={handleCategoryChange}
                 onCommentChange={handleCommentChange}
-                onNameChange={handleNameChange}
+                onOpenNote={handleOpenNote}
+                onOpenName={handleOpenName}
                 allCategories={allCategories}
               />
             ))}
@@ -977,6 +976,28 @@ function App() {
           </div>
         )}
       </main>
+
+      <NoteModal
+        key={noteModalUrl || 'closed'}
+        activity={noteModalActivity}
+        onSave={(text) => {
+          if (noteModalActivity) {
+            handleCommentChange(noteModalActivity.url, text)
+          }
+        }}
+        onClose={handleCloseNote}
+      />
+
+      <NameModal
+        key={nameModalUrl ? `name:${nameModalUrl}` : 'name:closed'}
+        activity={nameModalActivity}
+        onSave={(name) => {
+          if (nameModalActivity) {
+            handleNameChange(nameModalActivity.url, name)
+          }
+        }}
+        onClose={handleCloseName}
+      />
     </div>
   )
 }
