@@ -1,7 +1,10 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react'
 import './App.css'
 
-const API_BASE = '/api'
+// import.meta.env.BASE_URL is populated from vite.config's `base` and always
+// has a trailing slash, so this resolves to "/api" by default or
+// "/<VITE_BASE_PATH>/api" when the app is served under a sub-path.
+const API_BASE = `${import.meta.env.BASE_URL}api`
 
 const CATEGORY_LABELS = {
   all: 'All',

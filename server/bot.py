@@ -45,6 +45,14 @@ if not os.getenv("OPENAI_API_KEY"):
 # URL regex pattern
 URL_REGEX = re.compile(r"https?://[^\s<>\"{}|\\^`\[\]]+", re.IGNORECASE)
 
+# Matches google.<TLD> with any number of subdomains, including ccTLDs like
+# google.de, google.ru, google.co.uk, google.com.br. Single-segment TLDs are
+# 2-3 chars; compound TLDs are restricted to co.<cc> / com.<cc> so that
+# strings like "google.bogus.com" do NOT match.
+_GOOGLE_HOST_RE = re.compile(
+    r'^(?:.+\.)?google\.(?:[a-z]{2,3}|co\.[a-z]{2}|com\.[a-z]{2})$'
+)
+
 # Request settings for alive check
 TIMEOUT = 10
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
@@ -78,18 +86,18 @@ def is_google_maps_url(url: str) -> bool:
     if not host:
         return False
 
-    # maps.google.com / maps.google.de / etc.
-    if host.startswith('maps.google.'):
-        return True
     # Mobile / share short links
     if host == 'maps.app.goo.gl':
-        return True
-    # Long form: google.com/maps/...
-    if (host == 'google.com' or host.endswith('.google.com')) and path.startswith('/maps'):
         return True
     # Legacy short link
     if host == 'goo.gl' and path.startswith('/maps'):
         return True
+    # Any google.<TLD> domain — recognize maps subdomain or /maps path.
+    if _GOOGLE_HOST_RE.match(host):
+        if host.split('.', 1)[0] == 'maps':
+            return True
+        if path.startswith('/maps'):
+            return True
     return False
 
 
