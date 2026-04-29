@@ -2,13 +2,35 @@ import express from 'express';
 import cors from 'cors';
 import {
   getAllActivities,
-  getActivityByUrl,
   updateActivityField,
   deleteActivity,
 } from './db.js';
 
 const app = express();
 const PORT = 3002;
+
+// Mirrors the Python is_google_maps_url() in server/bot.py — keep in sync.
+const GOOGLE_HOST_RE = /^(?:.+\.)?google\.(?:[a-z]{2,3}|co\.[a-z]{2}|com\.[a-z]{2})$/;
+
+function isGoogleMapsUrl(input) {
+  if (!input || typeof input !== 'string') return false;
+  let parsed;
+  try {
+    parsed = new URL(input.trim());
+  } catch {
+    return false;
+  }
+  if (!/^https?:$/.test(parsed.protocol)) return false;
+  const host = (parsed.hostname || '').toLowerCase();
+  const path = (parsed.pathname || '').toLowerCase();
+  if (host === 'maps.app.goo.gl') return true;
+  if (host === 'goo.gl' && path.startsWith('/maps')) return true;
+  if (GOOGLE_HOST_RE.test(host)) {
+    if (host.split('.', 1)[0] === 'maps') return true;
+    if (path.startsWith('/maps')) return true;
+  }
+  return false;
+}
 
 app.use(cors());
 app.use(express.json());
@@ -89,6 +111,34 @@ app.put('/api/activities/comment', (req, res) => {
   } catch (error) {
     console.error('Error updating comment:', error);
     res.status(500).json({ error: 'Failed to update comment' });
+  }
+});
+
+app.put('/api/activities/maps-link', (req, res) => {
+  try {
+    const { url, googleMapsLink } = req.body;
+
+    if (!url) return res.status(400).json({ error: 'URL is required' });
+
+    // Empty / null clears the link; otherwise validate it's a Google Maps URL.
+    let value = null;
+    if (googleMapsLink != null && String(googleMapsLink).trim()) {
+      const trimmed = String(googleMapsLink).trim();
+      if (!isGoogleMapsUrl(trimmed)) {
+        return res.status(400).json({
+          error: 'Not a Google Maps URL. Examples: https://www.google.com/maps/...,  https://maps.app.goo.gl/...',
+        });
+      }
+      value = trimmed;
+    }
+
+    const activity = updateActivityField(url, 'googleMapsLink', value);
+    if (!activity) return res.status(404).json({ error: 'Activity not found' });
+
+    res.json({ success: true, activity });
+  } catch (error) {
+    console.error('Error updating googleMapsLink:', error);
+    res.status(500).json({ error: 'Failed to update Google Maps link' });
   }
 });
 

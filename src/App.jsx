@@ -157,7 +157,7 @@ function CategorySelect({ category, allCategories, onChange }) {
   )
 }
 
-function ActivityMenu({ activity, onDelete, onSetCategory, onOpenNote, onRemoveNote, onOpenName }) {
+function ActivityMenu({ activity, onDelete, onSetCategory, onOpenNote, onOpenName, onOpenDetails }) {
   const [isOpen, setIsOpen] = useState(false)
   const menuRef = useRef(null)
   const hasNote = !!(activity.userComment && activity.userComment.trim())
@@ -200,16 +200,14 @@ function ActivityMenu({ activity, onDelete, onSetCategory, onOpenNote, onRemoveN
           <button type="button" className="activity-menu__item" role="menuitem" onClick={() => { close(); onOpenName() }}>
             ✏️ Edit name
           </button>
+          <button type="button" className="activity-menu__item" role="menuitem" onClick={() => { close(); onOpenDetails() }}>
+            🔎 Show details
+          </button>
           <div className="activity-menu__sep" />
           {hasNote ? (
-            <>
-              <button type="button" className="activity-menu__item" role="menuitem" onClick={() => { close(); onOpenNote() }}>
-                ✏️ Edit note
-              </button>
-              <button type="button" className="activity-menu__item" role="menuitem" onClick={() => { close(); onRemoveNote() }}>
-                🗒️ Remove note
-              </button>
-            </>
+            <button type="button" className="activity-menu__item" role="menuitem" onClick={() => { close(); onOpenNote() }}>
+              ✏️ Edit note
+            </button>
           ) : (
             <button type="button" className="activity-menu__item" role="menuitem" onClick={() => { close(); onOpenNote() }}>
               📝 Add note
@@ -329,7 +327,236 @@ function NameModal({ activity, onSave, onClose }) {
   )
 }
 
-function ActivityCard({ activity, onRatingChange, onRemove, onCategoryChange, onCommentChange, onOpenNote, onOpenName, allCategories }) {
+// Mirrors the backend isGoogleMapsUrl() in node-server/server.js — keep in sync.
+const GOOGLE_HOST_RE = /^(?:.+\.)?google\.(?:[a-z]{2,3}|co\.[a-z]{2}|com\.[a-z]{2})$/
+
+function isGoogleMapsUrl(input) {
+  if (!input || typeof input !== 'string') return false
+  let parsed
+  try {
+    parsed = new URL(input.trim())
+  } catch {
+    return false
+  }
+  if (!/^https?:$/.test(parsed.protocol)) return false
+  const host = (parsed.hostname || '').toLowerCase()
+  const path = (parsed.pathname || '').toLowerCase()
+  if (host === 'maps.app.goo.gl') return true
+  if (host === 'goo.gl' && path.startsWith('/maps')) return true
+  if (GOOGLE_HOST_RE.test(host)) {
+    if (host.split('.', 1)[0] === 'maps') return true
+    if (path.startsWith('/maps')) return true
+  }
+  return false
+}
+
+// Try to extract { lat, lng, zoom } from a Google Maps URL like
+// .../@48.2046,11.5888,17.22z/... — covers most "share from Maps" links.
+// Returns null if the URL doesn't carry coordinates inline (e.g. short links
+// like maps.app.goo.gl/... that require a redirect to resolve).
+function extractMapsCoords(url) {
+  if (!url) return null
+  const match = url.match(/@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)(?:,(\d+(?:\.\d+)?)z)?/)
+  if (!match) return null
+  return {
+    lat: match[1],
+    lng: match[2],
+    zoom: match[3] || null,
+  }
+}
+
+// Google Maps zoom: ~10 = full city, ~12 = central districts, ~17 = street.
+// We force a city-scale view so a place's surroundings are always visible.
+const MAP_PREFERRED_ZOOM = 11
+
+function buildMapsEmbedSrc(activity) {
+  const coords = extractMapsCoords(activity.googleMapsLink)
+  if (coords) {
+    const parsed = coords.zoom != null ? parseFloat(coords.zoom) : NaN
+    const zoom = Number.isFinite(parsed)
+      ? Math.min(parsed, MAP_PREFERRED_ZOOM)
+      : MAP_PREFERRED_ZOOM
+    return `https://maps.google.com/maps?q=${coords.lat},${coords.lng}&z=${zoom}&output=embed`
+  }
+  if (activity.address) {
+    return `https://maps.google.com/maps?q=${encodeURIComponent(activity.address)}&z=${MAP_PREFERRED_ZOOM}&output=embed`
+  }
+  return null
+}
+
+function formatMinutes(min) {
+  if (min == null) return null
+  return min < 60 ? `${min} min` : `${Math.floor(min / 60)}h ${min % 60}min`
+}
+
+function MapsLinkForm({ activity, onSave }) {
+  const [value, setValue] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState(null)
+
+  const trimmed = value.trim()
+  const isValid = trimmed === '' ? false : isGoogleMapsUrl(trimmed)
+  const showInlineError = trimmed !== '' && !isValid
+
+  const handleSubmit = async (e) => {
+    e.preventDefault()
+    if (!isValid || saving) return
+    setSaving(true)
+    setError(null)
+    try {
+      await onSave(activity.url, trimmed)
+      // On success, the parent re-renders with googleMapsLink set, so this
+      // form is unmounted automatically.
+    } catch (err) {
+      setError(err.message || 'Failed to save Google Maps link.')
+      setSaving(false)
+    }
+  }
+
+  return (
+    <form className="details-modal__maps-form" onSubmit={handleSubmit}>
+      <label htmlFor="maps-link-input" className="details-modal__maps-label">
+        🗺️ Add a Google Maps link
+      </label>
+      <div className="details-modal__maps-row">
+        <input
+          id="maps-link-input"
+          type="url"
+          inputMode="url"
+          className="details-modal__maps-input"
+          placeholder="https://www.google.com/maps/place/..."
+          value={value}
+          onChange={(e) => { setValue(e.target.value); setError(null) }}
+          disabled={saving}
+          autoFocus
+        />
+        <button
+          type="submit"
+          className="details-modal__maps-save"
+          disabled={!isValid || saving}
+        >
+          {saving ? 'Saving…' : 'Save'}
+        </button>
+      </div>
+      {showInlineError && (
+        <div className="details-modal__maps-error">
+          That doesn't look like a Google Maps URL.
+          Try a link from <code>maps.google.com</code>, <code>google.com/maps</code>, or <code>maps.app.goo.gl</code>.
+        </div>
+      )}
+      {error && <div className="details-modal__maps-error">{error}</div>}
+    </form>
+  )
+}
+
+function DetailsModal({ activity, onClose, onSaveMapsLink }) {
+  useEffect(() => {
+    if (!activity) return
+    const handleKey = (e) => { if (e.key === 'Escape') onClose() }
+    document.addEventListener('keydown', handleKey)
+    return () => document.removeEventListener('keydown', handleKey)
+  }, [activity, onClose])
+
+  if (!activity) return null
+
+  const hasMapsLink = !!activity.googleMapsLink
+  const embedSrc = hasMapsLink ? buildMapsEmbedSrc(activity) : null
+  const driving = formatMinutes(activity.drivingMinutes)
+  const transit = formatMinutes(activity.transitMinutes)
+  const distance = activity.distanceKm != null ? `${activity.distanceKm} km` : null
+
+  const travelItems = []
+  if (driving) travelItems.push({ icon: '🚗', label: 'Driving', text: driving })
+  if (transit) travelItems.push({ icon: '🚌', label: 'Transit', text: `~${transit}` })
+  if (distance) travelItems.push({ label: 'Distance', text: distance })
+
+  const travelNode = travelItems.length > 0 ? (
+    <span className="details-modal__travel">
+      {travelItems.map((item, i) => (
+        <span key={i} className="details-modal__travel-item" title={item.label}>
+          {item.icon && (
+            <span className="details-modal__travel-icon" aria-hidden="true">
+              {item.icon}
+            </span>
+          )}
+          {item.text}
+        </span>
+      ))}
+    </span>
+  ) : null
+
+  const rows = [
+    ['Description', activity.description],
+    ['Note', activity.userComment],
+    ['Open hours', activity.openHours],
+    ['Address', activity.address],
+    ['Travel', travelNode],
+    ['Price', activity.price],
+  ].filter(([, value]) => value)
+
+  return (
+    <div className="note-modal__overlay" onClick={onClose}>
+      <div className="note-modal__dialog details-modal__dialog" onClick={(e) => e.stopPropagation()}>
+        <div className="details-modal__header">
+          <h3 className="note-modal__title details-modal__title">
+            {activity.shortName || 'Unnamed Activity'}
+          </h3>
+          <button
+            type="button"
+            className="details-modal__close"
+            onClick={onClose}
+            aria-label="Close"
+            title="Close"
+          >
+            ✕
+          </button>
+        </div>
+
+        {rows.length > 0 && (
+          <dl className="details-modal__rows">
+            {rows.map(([label, value]) => (
+              <div className="details-modal__row" key={label}>
+                <dt>{label}</dt>
+                <dd>{value}</dd>
+              </div>
+            ))}
+          </dl>
+        )}
+
+        {hasMapsLink ? (
+          <div className="details-modal__map-section">
+            <a
+              href={activity.googleMapsLink}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="details-modal__map-link"
+            >
+              🗺️ Open in Google Maps
+            </a>
+            {embedSrc ? (
+              <iframe
+                title="Google Maps location"
+                className="details-modal__map"
+                src={embedSrc}
+                loading="lazy"
+                referrerPolicy="no-referrer-when-downgrade"
+                allowFullScreen
+              />
+            ) : (
+              <div className="details-modal__map-fallback">
+                Map preview is unavailable for this link. Open it in Google Maps using the link above.
+              </div>
+            )}
+          </div>
+        ) : (
+          <MapsLinkForm activity={activity} onSave={onSaveMapsLink} />
+        )}
+      </div>
+    </div>
+  )
+}
+
+function ActivityCard({ activity, onRatingChange, onRemove, onCategoryChange, onOpenNote, onOpenName, onOpenDetails, allCategories }) {
   const handleRemove = () => {
     onRemove(activity.url)
   }
@@ -338,15 +565,17 @@ function ActivityCard({ activity, onRatingChange, onRemove, onCategoryChange, on
     onCategoryChange(activity.url, newCategory)
   }
 
-  const handleRemoveNote = () => {
-    onCommentChange(activity.url, '')
-  }
-
   const hasNote = !!(activity.userComment && activity.userComment.trim())
 
   const handleRowClick = (e) => {
     // Ignore clicks on inner interactive controls — they have their own behavior.
     if (e.target.closest('button, input, select, textarea, a, label, [role="menu"]')) {
+      return
+    }
+    // Cmd+click on Mac, Ctrl+click on Windows/Linux → open details popup.
+    if (e.metaKey || e.ctrlKey) {
+      e.preventDefault()
+      onOpenDetails(activity)
       return
     }
     if (!activity.url) return
@@ -357,6 +586,11 @@ function ActivityCard({ activity, onRatingChange, onRemove, onCategoryChange, on
     if (e.target !== e.currentTarget) return
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault()
+      // Same modifier semantics as click: Cmd/Ctrl + Enter opens details.
+      if (e.metaKey || e.ctrlKey) {
+        onOpenDetails(activity)
+        return
+      }
       if (activity.url) window.open(activity.url, '_blank', 'noopener,noreferrer')
     }
   }
@@ -368,7 +602,11 @@ function ActivityCard({ activity, onRatingChange, onRemove, onCategoryChange, on
       onKeyDown={handleRowKeyDown}
       role={activity.url ? 'link' : undefined}
       tabIndex={activity.url ? 0 : undefined}
-      title={activity.url ? `Open ${activity.url} in new tab` : undefined}
+      title={
+        activity.url
+          ? `Open ${activity.url} in new tab (⌘/Ctrl+click for details)`
+          : 'Click for details'
+      }
     >
       <div className="activity-list-item__name">
         <span className="activity-list-item__name-text">
@@ -406,8 +644,8 @@ function ActivityCard({ activity, onRatingChange, onRemove, onCategoryChange, on
         onDelete={handleRemove}
         onSetCategory={handleCategorySelect}
         onOpenNote={() => onOpenNote(activity)}
-        onRemoveNote={handleRemoveNote}
         onOpenName={() => onOpenName(activity)}
+        onOpenDetails={() => onOpenDetails(activity)}
       />
     </article>
   )
@@ -444,6 +682,7 @@ function App() {
   const [searchQuery, setSearchQuery] = useState('')
   const [noteModalUrl, setNoteModalUrl] = useState(null)
   const [nameModalUrl, setNameModalUrl] = useState(null)
+  const [detailsModalUrl, setDetailsModalUrl] = useState(null)
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
   const [sidebarDragX, setSidebarDragX] = useState(null) // null = not dragging, number = current position
   const searchInputRef = useRef(null)
@@ -775,6 +1014,19 @@ function App() {
     setNameModalUrl(null)
   }, [])
 
+  const detailsModalActivity = useMemo(
+    () => (detailsModalUrl ? activities.find(a => a.url === detailsModalUrl) : null) || null,
+    [detailsModalUrl, activities]
+  )
+
+  const handleOpenDetails = useCallback((activity) => {
+    setDetailsModalUrl(activity.url)
+  }, [])
+
+  const handleCloseDetails = useCallback(() => {
+    setDetailsModalUrl(null)
+  }, [])
+
   const handleNameChange = useCallback(async (url, name) => {
     try {
       const response = await fetch(`${API_BASE}/activities/name`, {
@@ -782,20 +1034,50 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url, name })
       })
-      
+
       if (!response.ok) {
         throw new Error('Failed to update name')
       }
-      
+
       const { activity } = await response.json()
-      
+
       // Update local state
-      setActivities(prev => prev.map(a => 
+      setActivities(prev => prev.map(a =>
         a.url === url ? { ...a, shortName: activity.shortName } : a
       ))
     } catch (error) {
       console.error('Error updating name:', error)
     }
+  }, [])
+
+  const handleMapsLinkChange = useCallback(async (url, googleMapsLink) => {
+    const response = await fetch(`${API_BASE}/activities/maps-link`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, googleMapsLink })
+    })
+
+    if (!response.ok) {
+      let serverError = 'Failed to save Google Maps link.'
+      try {
+        const body = await response.json()
+        if (body?.error) serverError = body.error
+      } catch { /* ignore */ }
+      throw new Error(serverError)
+    }
+
+    const { activity } = await response.json()
+
+    setActivities(prev => prev.map(a => {
+      if (a.url !== url) return a
+      const next = { ...a }
+      if (activity.googleMapsLink) {
+        next.googleMapsLink = activity.googleMapsLink
+      } else {
+        delete next.googleMapsLink
+      }
+      return next
+    }))
   }, [])
 
   // Handle Escape key: go back / reset filters / focus search
@@ -967,6 +1249,7 @@ function App() {
                 onCommentChange={handleCommentChange}
                 onOpenNote={handleOpenNote}
                 onOpenName={handleOpenName}
+                onOpenDetails={handleOpenDetails}
                 allCategories={allCategories}
               />
             ))}
@@ -1000,6 +1283,13 @@ function App() {
           }
         }}
         onClose={handleCloseName}
+      />
+
+      <DetailsModal
+        key={detailsModalUrl || 'details:closed'}
+        activity={detailsModalActivity}
+        onClose={handleCloseDetails}
+        onSaveMapsLink={handleMapsLinkChange}
       />
     </div>
   )

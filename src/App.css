@@ -589,6 +589,222 @@
   background: #e25a59;
 }
 
+/* Details modal — wider, scrollable, optional map iframe */
+.details-modal__dialog {
+  max-width: 720px;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+.details-modal__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.details-modal__title {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.details-modal__close {
+  flex: 0 0 auto;
+  background: none;
+  border: none;
+  font-size: 1.25rem;
+  line-height: 1;
+  cursor: pointer;
+  color: var(--text-secondary);
+  padding: 0.25rem 0.5rem;
+  border-radius: 50%;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.details-modal__close:hover {
+  background: #f0f0f0;
+  color: var(--text-primary);
+}
+
+.details-modal__rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0;
+}
+
+.details-modal__row {
+  display: grid;
+  grid-template-columns: 130px 1fr;
+  gap: 0.75rem;
+  align-items: baseline;
+}
+
+.details-modal__row dt {
+  font-weight: 600;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.details-modal__row dd {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 0.95rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.details-modal__travel {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1rem;
+  align-items: center;
+}
+
+.details-modal__travel-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  white-space: nowrap;
+}
+
+.details-modal__travel-icon {
+  font-size: 1.05rem;
+  line-height: 1;
+}
+
+.details-modal__map-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.details-modal__map-link {
+  align-self: flex-start;
+  font-size: 0.9rem;
+  color: var(--accent-sky);
+  text-decoration: none;
+}
+
+.details-modal__map-link:hover {
+  text-decoration: underline;
+  color: var(--accent-lavender);
+}
+
+.details-modal__map {
+  width: 100%;
+  height: 320px;
+  border: 0;
+  border-radius: var(--border-radius-sm);
+  background: #f0f0f0;
+}
+
+.details-modal__map-fallback {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  padding: 0.75rem;
+  background: #f7f7f7;
+  border-radius: var(--border-radius-sm);
+}
+
+/* Inline form to add a Google Maps link when one is missing */
+.details-modal__maps-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.85rem;
+  background: #f7f7f7;
+  border-radius: var(--border-radius-sm);
+}
+
+.details-modal__maps-label {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.details-modal__maps-row {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.details-modal__maps-input {
+  flex: 1 1 220px;
+  min-width: 0;
+  border: 1px solid #ddd;
+  border-radius: var(--border-radius-sm);
+  padding: 0.55rem 0.75rem;
+  font: inherit;
+  font-size: 0.9rem;
+  outline: none;
+  background: white;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.details-modal__maps-input:focus {
+  border-color: var(--accent-sky);
+  box-shadow: 0 0 0 3px rgba(116, 185, 255, 0.15);
+}
+
+.details-modal__maps-input:disabled {
+  background: #fafafa;
+  color: var(--text-secondary);
+}
+
+.details-modal__maps-save {
+  flex: 0 0 auto;
+  padding: 0.55rem 1rem;
+  border: 1px solid transparent;
+  border-radius: var(--border-radius-sm);
+  background: var(--accent-coral);
+  color: white;
+  font: inherit;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: background 0.15s ease, opacity 0.15s ease;
+}
+
+.details-modal__maps-save:hover:not(:disabled) {
+  background: #e25a59;
+}
+
+.details-modal__maps-save:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.details-modal__maps-error {
+  font-size: 0.8rem;
+  color: #d63031;
+}
+
+.details-modal__maps-error code {
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  font-size: 0.78rem;
+  background: rgba(0, 0, 0, 0.05);
+  padding: 0 0.3rem;
+  border-radius: 4px;
+}
+
+@media (max-width: 600px) {
+  .details-modal__row {
+    grid-template-columns: 1fr;
+    gap: 0.15rem;
+  }
+
+  .details-modal__row dt {
+    font-size: 0.75rem;
+  }
+
+  .details-modal__map {
+    height: 240px;
+  }
+}
+
 @media (max-width: 768px) {
   .activity-list-item {
     flex-wrap: wrap;
