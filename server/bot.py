@@ -323,6 +323,30 @@ def save_analysis_to_data(result: CrawlResult, google_maps_link: Optional[str] =
     return success
 
 
+def save_minimal_activity(url: str, google_maps_link: Optional[str] = None) -> bool:
+    """
+    Fallback save when the full analyser run failed/crashed. Stores just the
+    URL and optional Google Maps link, with shortName derived from the
+    hostname (matching build_activity_dict's fallback). Existing DB rows are
+    preserved-and-merged via save_or_update_activity, so this won't clobber
+    fields populated by an earlier successful analysis.
+    """
+    try:
+        host_short = url.split("/")[2].replace("www.", "")
+    except IndexError:
+        host_short = url
+    activity: dict = {
+        "url": url,
+        "shortName": host_short,
+        "alive": True,
+        "lastUpdated": date.today().isoformat(),
+    }
+    if google_maps_link:
+        activity["googleMapsLink"] = google_maps_link
+    success, _, _ = save_or_update_activity(activity)
+    return success
+
+
 def build_activity_dict(result: CrawlResult, google_maps_link: Optional[str] = None) -> dict:
     """Build activity dict from CrawlResult (matches run_analyser_for_all_urls.py)"""
     activity = {
@@ -545,14 +569,20 @@ async def process_url_pipeline(update: Update, url: str, google_maps_link: Optio
     
     try:
         analysis = await analyse_url(url)
-        
+
         if not analysis.available or analysis.error:
+            # Analyser ran but couldn't extract useful data — fall back to a
+            # minimal save so the URL is still recorded.
+            saved = save_minimal_activity(url, google_maps_link=google_maps_link)
+            reason = analysis.error or "Unknown error"
+            extra = " The URL and Google Maps link were saved." if google_maps_link else " The URL was saved."
             await status_msg.edit_text(
-                f"❌ Analysis failed: {url}\n\n"
-                f"Error: {analysis.error or 'Unknown error'}"
+                f"⚠️ Analysis failed: {url}\n\n"
+                f"Reason: {reason}\n\n"
+                f"{'💾' if saved else '❌'}{extra if saved else ' Failed to save fallback record.'}"
             )
             return
-        
+
         # Step 5: Save to DB (with optional Google Maps link supplied by user)
         save_analysis_to_data(analysis, google_maps_link=google_maps_link)
 
@@ -562,13 +592,18 @@ async def process_url_pipeline(update: Update, url: str, google_maps_link: Optio
             parse_mode="Markdown",
             disable_web_page_preview=True,
         )
-        
+
         await update.message.reply_text("💾 Saved to database!")
-        
+
     except Exception as e:
         print(f"Error analyzing URL: {e}")
+        # Crash during analyse — still save a minimal record.
+        saved = save_minimal_activity(url, google_maps_link=google_maps_link)
+        extra = " URL and Google Maps link saved." if google_maps_link else " URL saved."
         await status_msg.edit_text(
-            f"❌ Failed to analyze: {url}\n\nError: {str(e)}"
+            f"⚠️ Failed to analyze: {url}\n\n"
+            f"Error: {str(e)}\n\n"
+            f"{'💾' if saved else '❌'}{extra if saved else ' Fallback save also failed.'}"
         )
 
 
