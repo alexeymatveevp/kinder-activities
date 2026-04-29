@@ -8,6 +8,7 @@ Pipeline (same as run.py but for single URL):
 4. Run analyser to extract info
 5. Save to data.json
 """
+import asyncio
 import os
 import re
 import json
@@ -55,7 +56,30 @@ _GOOGLE_HOST_RE = re.compile(
 
 # Request settings for alive check
 TIMEOUT = 10
-USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+
+# Browser-like headers for the alive check. Many sites (e.g. Cloudflare-fronted
+# ones like www.bergtierpark.de) reject naked aiohttp requests as bots.
+# Note: no "br" in Accept-Encoding because aiohttp lacks brotli by default and
+# would error on br-encoded responses.
+ALIVE_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/126.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9,de;q=0.8",
+    "Accept-Encoding": "gzip, deflate",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
+}
+
+# Status codes worth retrying once — typical for transient bot-detection
+# challenges that resolve themselves on a second hit.
+_TRANSIENT_STATUSES = {403, 429, 503}
 
 
 def extract_urls(text: str) -> list[str]:
@@ -224,31 +248,66 @@ def get_content_type_label(content_type: str | None) -> str:
     return "other"
 
 
+def _is_cloudflare_challenge(status, response_headers):
+    """A Cloudflare interactive challenge means the site is alive but plain
+    HTTP can't pass. Detected via the Cf-Mitigated header (cleanest signal)
+    or by a Cloudflare-served 403/503."""
+    if response_headers is None:
+        return False
+    if response_headers.get("Cf-Mitigated", "").lower() == "challenge":
+        return True
+    server = (response_headers.get("Server") or "").lower()
+    if "cloudflare" in server and status in (403, 503):
+        return True
+    return False
+
+
 async def check_url_alive(url: str) -> tuple[bool, str]:
     """
     Check if a URL is alive and get its content type.
     Returns: (is_alive, content_type_label)
 
-    Strategy: HEAD first (cheap), then fall back to GET on either a connection
-    error OR a >= 400 HEAD response — many sites with bot/WAF protection
-    answer HEAD with 403/405 but accept GET (e.g. www.bergtierpark.de).
+    Strategy: GET with browser-like headers (HEAD is unreliable behind WAFs
+    like Cloudflare — those usually 403 a HEAD request). On a transient bot-
+    detection status (403/429/503), retry once after a short backoff in the
+    same session so any cookies set by the first response (e.g. __cf_bm) are
+    re-used. If the final response is a Cloudflare challenge page, treat the
+    site as alive — the downstream analyser can run a real browser.
     """
-    headers = {"User-Agent": USER_AGENT}
     timeout = aiohttp.ClientTimeout(total=TIMEOUT)
 
     async def do_get(session):
         async with session.get(url, timeout=timeout, allow_redirects=True, ssl=False) as response:
-            return (response.status < 400, get_content_type_label(response.headers.get("Content-Type")))
+            return response.status, response.headers
 
     try:
-        async with aiohttp.ClientSession(headers=headers) as session:
+        async with aiohttp.ClientSession(headers=ALIVE_HEADERS) as session:
             try:
-                async with session.head(url, timeout=timeout, allow_redirects=True, ssl=False) as response:
-                    if response.status < 400:
-                        return (True, get_content_type_label(response.headers.get("Content-Type")))
+                status, headers = await do_get(session)
             except aiohttp.ClientError:
-                pass  # fall through to GET
-            return await do_get(session)
+                status, headers = None, None
+
+            if status in _TRANSIENT_STATUSES or status is None:
+                await asyncio.sleep(1)
+                try:
+                    status, headers = await do_get(session)
+                except aiohttp.ClientError:
+                    return (False, "unknown")
+
+            if status is None:
+                return (False, "unknown")
+
+            content_type = headers.get("Content-Type") if headers is not None else None
+            label = get_content_type_label(content_type)
+
+            if status < 400:
+                return (True, label)
+
+            # Cloudflare challenge → site is alive, just protected.
+            if _is_cloudflare_challenge(status, headers):
+                return (True, label or "website")
+
+            return (False, label)
     except Exception:
         return (False, "unknown")
 
