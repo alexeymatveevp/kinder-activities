@@ -228,24 +228,27 @@ async def check_url_alive(url: str) -> tuple[bool, str]:
     """
     Check if a URL is alive and get its content type.
     Returns: (is_alive, content_type_label)
+
+    Strategy: HEAD first (cheap), then fall back to GET on either a connection
+    error OR a >= 400 HEAD response — many sites with bot/WAF protection
+    answer HEAD with 403/405 but accept GET (e.g. www.bergtierpark.de).
     """
     headers = {"User-Agent": USER_AGENT}
     timeout = aiohttp.ClientTimeout(total=TIMEOUT)
-    
+
+    async def do_get(session):
+        async with session.get(url, timeout=timeout, allow_redirects=True, ssl=False) as response:
+            return (response.status < 400, get_content_type_label(response.headers.get("Content-Type")))
+
     try:
         async with aiohttp.ClientSession(headers=headers) as session:
-            # Try HEAD first
             try:
                 async with session.head(url, timeout=timeout, allow_redirects=True, ssl=False) as response:
-                    is_alive = response.status < 400
-                    content_type = get_content_type_label(response.headers.get("Content-Type"))
-                    return (is_alive, content_type)
+                    if response.status < 400:
+                        return (True, get_content_type_label(response.headers.get("Content-Type")))
             except aiohttp.ClientError:
-                # Try GET if HEAD fails
-                async with session.get(url, timeout=timeout, allow_redirects=True, ssl=False) as response:
-                    is_alive = response.status < 400
-                    content_type = get_content_type_label(response.headers.get("Content-Type"))
-                    return (is_alive, content_type)
+                pass  # fall through to GET
+            return await do_get(session)
     except Exception:
         return (False, "unknown")
 
