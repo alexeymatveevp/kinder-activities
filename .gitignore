@@ -3,6 +3,11 @@ server/venv/
 scripts/
 env.example
 
+# Python bytecode / build artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+
 # Logs
 logs
 *.log
