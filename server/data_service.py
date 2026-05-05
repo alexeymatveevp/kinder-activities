@@ -1,8 +1,8 @@
 """
 Data service for managing activities.
 
-Thin wrapper over db_service (SQLite). Kept as a compatibility layer so callers
-don't need to change their import paths.
+Thin wrapper over db_service (PostgreSQL). Kept as a compatibility layer so
+callers don't need to change their import paths.
 """
 from typing import TypedDict, Optional
 from urllib.parse import urlparse

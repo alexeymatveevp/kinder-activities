@@ -29,7 +29,7 @@ const COLUMNS = [
   'transitMinutes', 'distanceKm', 'userComment', 'price',
 ];
 
-// createdAt is excluded — write-once invariant preserved from the SQLite version.
+// createdAt is excluded — written once at row creation, never updated.
 const UPDATABLE_COLUMNS = new Set(COLUMNS.filter(c => c !== 'url' && c !== 'createdAt'));
 
 async function ensureSchema() {
@@ -55,11 +55,11 @@ async function ensureSchema() {
     )
   `);
 
-  // Forward-compatible additive migrations — Postgres supports IF NOT EXISTS
-  // on ADD COLUMN natively.
+  // Forward-compatible additive migrations — kept idempotent so restarts and
+  // schema-drift scenarios stay safe.
   await pool.query(`ALTER TABLE activities ADD COLUMN IF NOT EXISTS "createdAt" TEXT NOT NULL DEFAULT ''`);
   await pool.query(`ALTER TABLE activities ADD COLUMN IF NOT EXISTS "googleMapsLink" TEXT`);
-  // If migrating from a pre-createdAt SQLite snapshot, backfill from lastUpdated.
+  // Backfill createdAt from lastUpdated for any pre-migration rows still empty.
   await pool.query(`UPDATE activities SET "createdAt" = "lastUpdated" WHERE "createdAt" = ''`);
 }
 
@@ -161,7 +161,8 @@ export async function addActivity(activity) {
 
   // ON CONFLICT preserves the existing row's createdAt by default (we don't
   // include it in UPDATE_SET), but we still want createdAt to be set sensibly
-  // for *new* rows. Compute the value the same way the SQLite version did.
+  // for *new* rows. Prefer any value already stored, then any value provided
+  // on the activity, finally fall back to lastUpdated.
   const existingRes = await pool.query(
     'SELECT "createdAt" FROM activities WHERE "url" = $1',
     [activity.url]
