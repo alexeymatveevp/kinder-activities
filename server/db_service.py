@@ -252,11 +252,21 @@ def update_activity_field(url: str, field: str, value) -> Optional[dict]:
     else:
         cell_value = value
 
+    # Bump lastUpdated to today on every change so the user can track
+    # recently-touched activities. Skip the bump if lastUpdated itself is the
+    # field being set (so the explicit caller value isn't overwritten).
     with conn.cursor() as cur:
-        cur.execute(
-            f'UPDATE activities SET "{field}" = %s WHERE "url" = %s',
-            (cell_value, url),
-        )
+        if field == 'lastUpdated':
+            cur.execute(
+                'UPDATE activities SET "lastUpdated" = %s WHERE "url" = %s',
+                (cell_value, url),
+            )
+        else:
+            today = date.today().isoformat()
+            cur.execute(
+                f'UPDATE activities SET "{field}" = %s, "lastUpdated" = %s WHERE "url" = %s',
+                (cell_value, today, url),
+            )
         rowcount = cur.rowcount
     conn.commit()
     if rowcount == 0:

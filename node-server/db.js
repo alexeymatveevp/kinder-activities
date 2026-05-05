@@ -130,8 +130,22 @@ export async function updateActivityField(url, field, value) {
     throw new Error(`Unknown or non-updatable field: ${field}`);
   }
   await schemaReady();
-  const sql = `UPDATE activities SET "${field}" = $1 WHERE "url" = $2`;
-  const result = await pool.query(sql, [encodeValue(field, value), url]);
+
+  // Bump lastUpdated to today on every change so the user can see what they
+  // touched recently. Skip the bump if the caller is explicitly setting
+  // lastUpdated itself (so the provided value isn't overwritten).
+  let sql;
+  let params;
+  if (field === 'lastUpdated') {
+    sql = `UPDATE activities SET "lastUpdated" = $1 WHERE "url" = $2`;
+    params = [encodeValue(field, value), url];
+  } else {
+    const today = new Date().toISOString().slice(0, 10);
+    sql = `UPDATE activities SET "${field}" = $1, "lastUpdated" = $2 WHERE "url" = $3`;
+    params = [encodeValue(field, value), today, url];
+  }
+
+  const result = await pool.query(sql, params);
   if (result.rowCount === 0) return null;
   return getActivityByUrl(url);
 }
