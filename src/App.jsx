@@ -328,7 +328,7 @@ function NameModal({ activity, onSave, onClose }) {
   )
 }
 
-// Mirrors the Python is_google_maps_url() in server/bot.py — keep in sync.
+// Mirrors the backend isGoogleMapsUrl() in node-server/server.js — keep in sync.
 const GOOGLE_HOST_RE = /^(?:.+\.)?google\.(?:[a-z]{2,3}|co\.[a-z]{2}|com\.[a-z]{2})$/
 
 function isGoogleMapsUrl(input) {
