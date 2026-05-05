@@ -1,7 +1,7 @@
-import Database from 'better-sqlite3';
+import process from 'node:process';
+import pg from 'pg';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import fs from 'fs';
 import dotenv from 'dotenv';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -9,63 +9,67 @@ const REPO_ROOT = path.join(__dirname, '..');
 
 dotenv.config({ path: path.join(REPO_ROOT, '.env') });
 
-const DB_PATH = process.env.KINDER_DB_PATH
-  ? path.resolve(REPO_ROOT, process.env.KINDER_DB_PATH)
-  : path.join(REPO_ROOT, 'data', 'activities.db');
+const { Pool } = pg;
 
-fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
-
-const db = new Database(DB_PATH);
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
-
-db.exec(`
-  CREATE TABLE IF NOT EXISTS activities (
-    url             TEXT PRIMARY KEY,
-    shortName       TEXT NOT NULL DEFAULT '',
-    alive           INTEGER NOT NULL DEFAULT 1,
-    createdAt       TEXT NOT NULL DEFAULT '',
-    lastUpdated     TEXT NOT NULL DEFAULT '',
-    category        TEXT,
-    openHours       TEXT,
-    address         TEXT,
-    googleMapsLink  TEXT,
-    services        TEXT,
-    description     TEXT,
-    userRating      INTEGER,
-    drivingMinutes  INTEGER,
-    transitMinutes  INTEGER,
-    distanceKm      REAL,
-    userComment     TEXT,
-    price           TEXT
+const DATABASE_URL = process.env.DATABASE_URL;
+if (!DATABASE_URL) {
+  throw new Error(
+    'DATABASE_URL is not set. Add it to .env (e.g. ' +
+    'postgresql://user:pass@localhost:5432/kinder_activities).'
   );
-`);
-
-// Migrations — idempotent; safe to run on every server boot.
-{
-  const cols = db.prepare("PRAGMA table_info('activities')").all();
-  const colNames = new Set(cols.map((c) => c.name));
-
-  // createdAt: backfill from lastUpdated for pre-existing rows.
-  if (!colNames.has('createdAt')) {
-    db.exec("ALTER TABLE activities ADD COLUMN createdAt TEXT NOT NULL DEFAULT ''");
-    db.exec("UPDATE activities SET createdAt = lastUpdated WHERE createdAt = ''");
-  }
-
-  // googleMapsLink: nullable, no backfill — defaults to NULL for existing rows.
-  if (!colNames.has('googleMapsLink')) {
-    db.exec('ALTER TABLE activities ADD COLUMN googleMapsLink TEXT');
-  }
 }
 
+const pool = new Pool({ connectionString: DATABASE_URL });
+
+// Identifiers stay camelCase, double-quoted everywhere — matches the existing
+// JSON shape exposed to the frontend.
 const COLUMNS = [
   'url', 'shortName', 'alive', 'createdAt', 'lastUpdated', 'category', 'openHours',
   'address', 'googleMapsLink', 'services', 'description', 'userRating', 'drivingMinutes',
   'transitMinutes', 'distanceKm', 'userComment', 'price',
 ];
 
-// createdAt is excluded — it must only be written on creation.
+// createdAt is excluded — write-once invariant preserved from the SQLite version.
 const UPDATABLE_COLUMNS = new Set(COLUMNS.filter(c => c !== 'url' && c !== 'createdAt'));
+
+async function ensureSchema() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS activities (
+      "url"             TEXT PRIMARY KEY,
+      "shortName"       TEXT NOT NULL DEFAULT '',
+      "alive"           BOOLEAN NOT NULL DEFAULT TRUE,
+      "createdAt"       TEXT NOT NULL DEFAULT '',
+      "lastUpdated"     TEXT NOT NULL DEFAULT '',
+      "category"        TEXT,
+      "openHours"       TEXT,
+      "address"         TEXT,
+      "googleMapsLink"  TEXT,
+      "services"        TEXT,
+      "description"     TEXT,
+      "userRating"      INTEGER,
+      "drivingMinutes"  INTEGER,
+      "transitMinutes"  INTEGER,
+      "distanceKm"      DOUBLE PRECISION,
+      "userComment"     TEXT,
+      "price"           TEXT
+    )
+  `);
+
+  // Forward-compatible additive migrations — Postgres supports IF NOT EXISTS
+  // on ADD COLUMN natively.
+  await pool.query(`ALTER TABLE activities ADD COLUMN IF NOT EXISTS "createdAt" TEXT NOT NULL DEFAULT ''`);
+  await pool.query(`ALTER TABLE activities ADD COLUMN IF NOT EXISTS "googleMapsLink" TEXT`);
+  // If migrating from a pre-createdAt SQLite snapshot, backfill from lastUpdated.
+  await pool.query(`UPDATE activities SET "createdAt" = "lastUpdated" WHERE "createdAt" = ''`);
+}
+
+// Schema is created lazily on first query; track the in-flight promise so
+// concurrent callers share the same bootstrap.
+let schemaReadyPromise = null;
+function schemaReady() {
+  if (!schemaReadyPromise) schemaReadyPromise = ensureSchema();
+  return schemaReadyPromise;
+}
 
 function rowToActivity(row) {
   if (!row || !row.url) return null;
@@ -73,7 +77,7 @@ function rowToActivity(row) {
   const activity = {
     url: row.url,
     shortName: row.shortName || '',
-    alive: row.alive === 1,
+    alive: row.alive === true,
     createdAt: row.createdAt || '',
     lastUpdated: row.lastUpdated || '',
   };
@@ -102,97 +106,102 @@ function rowToActivity(row) {
 
 function encodeValue(field, value) {
   if (value === undefined || value === null) return null;
-  if (field === 'alive') return value ? 1 : 0;
+  if (field === 'alive') return Boolean(value);
   if (field === 'services') {
     return Array.isArray(value) ? JSON.stringify(value) : String(value);
   }
   return value;
 }
 
-const selectAllStmt = db.prepare('SELECT * FROM activities');
-const selectByUrlStmt = db.prepare('SELECT * FROM activities WHERE url = ?');
-const deleteByUrlStmt = db.prepare('DELETE FROM activities WHERE url = ?');
-
-export function getAllActivities() {
-  return selectAllStmt.all().map(rowToActivity).filter(Boolean);
+export async function getAllActivities() {
+  await schemaReady();
+  const { rows } = await pool.query('SELECT * FROM activities');
+  return rows.map(rowToActivity).filter(Boolean);
 }
 
-export function getActivityByUrl(url) {
-  const row = selectByUrlStmt.get(url);
-  return row ? rowToActivity(row) : null;
+export async function getActivityByUrl(url) {
+  await schemaReady();
+  const { rows } = await pool.query('SELECT * FROM activities WHERE "url" = $1', [url]);
+  return rows.length ? rowToActivity(rows[0]) : null;
 }
 
-const updateStmtCache = new Map();
-
-export function updateActivityField(url, field, value) {
+export async function updateActivityField(url, field, value) {
   if (!UPDATABLE_COLUMNS.has(field)) {
     throw new Error(`Unknown or non-updatable field: ${field}`);
   }
-
-  let stmt = updateStmtCache.get(field);
-  if (!stmt) {
-    stmt = db.prepare(`UPDATE activities SET ${field} = ? WHERE url = ?`);
-    updateStmtCache.set(field, stmt);
-  }
-
-  const result = stmt.run(encodeValue(field, value), url);
-  if (result.changes === 0) return null;
+  await schemaReady();
+  const sql = `UPDATE activities SET "${field}" = $1 WHERE "url" = $2`;
+  const result = await pool.query(sql, [encodeValue(field, value), url]);
+  if (result.rowCount === 0) return null;
   return getActivityByUrl(url);
 }
 
-export function deleteActivity(url) {
-  const result = deleteByUrlStmt.run(url);
-  return result.changes > 0;
+export async function deleteActivity(url) {
+  await schemaReady();
+  const result = await pool.query('DELETE FROM activities WHERE "url" = $1', [url]);
+  return result.rowCount > 0;
 }
 
-const insertStmt = db.prepare(`
-  INSERT OR REPLACE INTO activities (
-    url, shortName, alive, createdAt, lastUpdated, category, openHours, address,
-    googleMapsLink, services, description, userRating, drivingMinutes, transitMinutes,
-    distanceKm, userComment, price
-  ) VALUES (
-    @url, @shortName, @alive, @createdAt, @lastUpdated, @category, @openHours, @address,
-    @googleMapsLink, @services, @description, @userRating, @drivingMinutes, @transitMinutes,
-    @distanceKm, @userComment, @price
-  )
-`);
+const QUOTED_COLUMNS = COLUMNS.map((c) => `"${c}"`).join(', ');
+const PLACEHOLDERS = COLUMNS.map((_, i) => `$${i + 1}`).join(', ');
+// On conflict, update every column except the primary key and createdAt.
+const UPDATE_SET = COLUMNS
+  .filter((c) => c !== 'url' && c !== 'createdAt')
+  .map((c) => `"${c}" = EXCLUDED."${c}"`)
+  .join(', ');
 
-const selectCreatedAtStmt = db.prepare('SELECT createdAt FROM activities WHERE url = ?');
+const UPSERT_SQL = `
+  INSERT INTO activities (${QUOTED_COLUMNS})
+  VALUES (${PLACEHOLDERS})
+  ON CONFLICT ("url") DO UPDATE SET ${UPDATE_SET}
+`;
 
-export function addActivity(activity) {
-  // INSERT OR REPLACE deletes and re-inserts, so we must preserve the existing
-  // createdAt for known URLs. createdAt is only written on creation.
-  const existing = selectCreatedAtStmt.get(activity.url);
+export async function addActivity(activity) {
+  await schemaReady();
+
+  // ON CONFLICT preserves the existing row's createdAt by default (we don't
+  // include it in UPDATE_SET), but we still want createdAt to be set sensibly
+  // for *new* rows. Compute the value the same way the SQLite version did.
+  const existingRes = await pool.query(
+    'SELECT "createdAt" FROM activities WHERE "url" = $1',
+    [activity.url]
+  );
+  const existingCreatedAt = existingRes.rows[0]?.createdAt || '';
   const lastUpdated = activity.lastUpdated || '';
-  const createdAt = existing?.createdAt
+  const createdAt = existingCreatedAt
     || activity.createdAt
     || lastUpdated;
 
-  const params = {
-    url: activity.url,
-    shortName: activity.shortName || '',
-    alive: activity.alive === false ? 0 : 1,
+  const params = [
+    activity.url,
+    activity.shortName || '',
+    activity.alive === false ? false : true,
     createdAt,
     lastUpdated,
-    category: activity.category ?? null,
-    openHours: activity.openHours ?? null,
-    address: activity.address ?? null,
-    googleMapsLink: activity.googleMapsLink ?? null,
-    services: activity.services ? JSON.stringify(activity.services) : null,
-    description: activity.description ?? null,
-    userRating: activity.userRating ?? null,
-    drivingMinutes: activity.drivingMinutes ?? null,
-    transitMinutes: activity.transitMinutes ?? null,
-    distanceKm: activity.distanceKm ?? null,
-    userComment: activity.userComment ?? null,
-    price: activity.price ?? null,
-  };
-  insertStmt.run(params);
+    activity.category ?? null,
+    activity.openHours ?? null,
+    activity.address ?? null,
+    activity.googleMapsLink ?? null,
+    activity.services ? JSON.stringify(activity.services) : null,
+    activity.description ?? null,
+    activity.userRating ?? null,
+    activity.drivingMinutes ?? null,
+    activity.transitMinutes ?? null,
+    activity.distanceKm ?? null,
+    activity.userComment ?? null,
+    activity.price ?? null,
+  ];
+  await pool.query(UPSERT_SQL, params);
   return getActivityByUrl(activity.url);
 }
 
-export const insertManyActivities = db.transaction((activities) => {
-  for (const a of activities) addActivity(a);
-});
+export async function insertManyActivities(activities) {
+  await schemaReady();
+  // Sequential loop — each row is an idempotent UPSERT, so per-row failures
+  // don't poison the rest. Volume is low (single-VPS, ~hundreds of rows).
+  for (const a of activities) {
+    await addActivity(a);
+  }
+}
 
-export { db };
+export { pool, ensureSchema, COLUMNS };

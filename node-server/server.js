@@ -35,16 +35,16 @@ function isGoogleMapsUrl(input) {
 app.use(cors());
 app.use(express.json());
 
-app.get('/api/activities', (req, res) => {
+app.get('/api/activities', async (req, res) => {
   try {
-    res.json(getAllActivities());
+    res.json(await getAllActivities());
   } catch (error) {
     console.error('Error loading activities:', error);
     res.status(500).json({ error: 'Failed to load activities' });
   }
 });
 
-app.put('/api/activities/rating', (req, res) => {
+app.put('/api/activities/rating', async (req, res) => {
   try {
     const { url, rating } = req.body;
 
@@ -53,7 +53,7 @@ app.put('/api/activities/rating', (req, res) => {
       return res.status(400).json({ error: 'Rating must be between 1 and 5' });
     }
 
-    const activity = updateActivityField(url, 'userRating', rating);
+    const activity = await updateActivityField(url, 'userRating', rating);
     if (!activity) return res.status(404).json({ error: 'Activity not found' });
 
     res.json({ success: true, activity });
@@ -63,14 +63,14 @@ app.put('/api/activities/rating', (req, res) => {
   }
 });
 
-app.put('/api/activities/category', (req, res) => {
+app.put('/api/activities/category', async (req, res) => {
   try {
     const { url, category } = req.body;
 
     if (!url) return res.status(400).json({ error: 'URL is required' });
     if (!category) return res.status(400).json({ error: 'Category is required' });
 
-    const activity = updateActivityField(url, 'category', category);
+    const activity = await updateActivityField(url, 'category', category);
     if (!activity) return res.status(404).json({ error: 'Activity not found' });
 
     res.json({ success: true, activity });
@@ -80,14 +80,14 @@ app.put('/api/activities/category', (req, res) => {
   }
 });
 
-app.put('/api/activities/name', (req, res) => {
+app.put('/api/activities/name', async (req, res) => {
   try {
     const { url, name } = req.body;
 
     if (!url) return res.status(400).json({ error: 'URL is required' });
 
     const shortName = name && name.trim() ? name.trim() : 'Unnamed Activity';
-    const activity = updateActivityField(url, 'shortName', shortName);
+    const activity = await updateActivityField(url, 'shortName', shortName);
     if (!activity) return res.status(404).json({ error: 'Activity not found' });
 
     res.json({ success: true, activity });
@@ -97,14 +97,14 @@ app.put('/api/activities/name', (req, res) => {
   }
 });
 
-app.put('/api/activities/comment', (req, res) => {
+app.put('/api/activities/comment', async (req, res) => {
   try {
     const { url, comment } = req.body;
 
     if (!url) return res.status(400).json({ error: 'URL is required' });
 
     const value = comment && comment.trim() ? comment.trim() : null;
-    const activity = updateActivityField(url, 'userComment', value);
+    const activity = await updateActivityField(url, 'userComment', value);
     if (!activity) return res.status(404).json({ error: 'Activity not found' });
 
     res.json({ success: true, activity });
@@ -114,7 +114,7 @@ app.put('/api/activities/comment', (req, res) => {
   }
 });
 
-app.put('/api/activities/maps-link', (req, res) => {
+app.put('/api/activities/maps-link', async (req, res) => {
   try {
     const { url, googleMapsLink } = req.body;
 
@@ -132,7 +132,7 @@ app.put('/api/activities/maps-link', (req, res) => {
       value = trimmed;
     }
 
-    const activity = updateActivityField(url, 'googleMapsLink', value);
+    const activity = await updateActivityField(url, 'googleMapsLink', value);
     if (!activity) return res.status(404).json({ error: 'Activity not found' });
 
     res.json({ success: true, activity });
@@ -142,13 +142,13 @@ app.put('/api/activities/maps-link', (req, res) => {
   }
 });
 
-app.delete('/api/activities', (req, res) => {
+app.delete('/api/activities', async (req, res) => {
   try {
     const { url } = req.body;
 
     if (!url) return res.status(400).json({ error: 'URL is required' });
 
-    const existed = deleteActivity(url);
+    const existed = await deleteActivity(url);
     if (!existed) return res.status(404).json({ error: 'Activity not found' });
 
     res.json({ success: true, message: 'Activity removed successfully' });

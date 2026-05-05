@@ -1,24 +1,26 @@
-"""SQLite-backed activities storage used by data_service.py."""
+"""PostgreSQL-backed activities storage used by data_service.py."""
 import json
 import os
-import sqlite3
 from datetime import date
 from pathlib import Path
 from typing import Optional
 
+import psycopg
+from psycopg.rows import dict_row
 from dotenv import load_dotenv
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(_REPO_ROOT / '.env')
 
-_env_db_path = os.getenv('KINDER_DB_PATH')
-if _env_db_path:
-    _DB_PATH = Path(_env_db_path)
-    if not _DB_PATH.is_absolute():
-        _DB_PATH = (_REPO_ROOT / _DB_PATH).resolve()
-else:
-    _DB_PATH = _REPO_ROOT / 'data' / 'activities.db'
+_DATABASE_URL = os.getenv('DATABASE_URL')
+if not _DATABASE_URL:
+    raise RuntimeError(
+        'DATABASE_URL is not set. Add it to .env (e.g. '
+        'postgresql://user:pass@localhost:5432/kinder_activities).'
+    )
 
+# Identifiers stay camelCase, double-quoted everywhere — matches the existing
+# JSON shape exposed to the frontend.
 HEADER_ROW = [
     'url', 'shortName', 'alive', 'createdAt', 'lastUpdated', 'category', 'openHours',
     'address', 'googleMapsLink', 'services', 'description', 'userRating', 'drivingMinutes',
@@ -35,68 +37,80 @@ _OPTIONAL_STRING_FIELDS = {
     'category', 'openHours', 'address', 'googleMapsLink', 'description', 'userComment', 'price',
 }
 
-_conn: Optional[sqlite3.Connection] = None
+_QUOTED_COLUMNS = ', '.join(f'"{c}"' for c in HEADER_ROW)
+_NAMED_PLACEHOLDERS = ', '.join(f'%({c})s' for c in HEADER_ROW)
+# On conflict, update every column except the primary key and createdAt.
+_UPSERT_SET = ', '.join(
+    f'"{c}" = EXCLUDED."{c}"'
+    for c in HEADER_ROW
+    if c not in _NON_UPDATABLE_COLUMNS
+)
+_UPSERT_SQL = (
+    f'INSERT INTO activities ({_QUOTED_COLUMNS}) '
+    f'VALUES ({_NAMED_PLACEHOLDERS}) '
+    f'ON CONFLICT ("url") DO UPDATE SET {_UPSERT_SET}'
+)
+
+_conn: Optional[psycopg.Connection] = None
+_schema_ready: bool = False
 
 
-def _get_conn() -> sqlite3.Connection:
-    global _conn
-    if _conn is not None:
-        return _conn
-
-    _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(_DB_PATH))
-    conn.row_factory = sqlite3.Row
-    conn.execute('PRAGMA journal_mode = WAL')
-    conn.execute('PRAGMA foreign_keys = ON')
-    conn.execute('''
-        CREATE TABLE IF NOT EXISTS activities (
-            url             TEXT PRIMARY KEY,
-            shortName       TEXT NOT NULL DEFAULT '',
-            alive           INTEGER NOT NULL DEFAULT 1,
-            createdAt       TEXT NOT NULL DEFAULT '',
-            lastUpdated     TEXT NOT NULL DEFAULT '',
-            category        TEXT,
-            openHours       TEXT,
-            address         TEXT,
-            googleMapsLink  TEXT,
-            services        TEXT,
-            description     TEXT,
-            userRating      INTEGER,
-            drivingMinutes  INTEGER,
-            transitMinutes  INTEGER,
-            distanceKm      REAL,
-            userComment     TEXT,
-            price           TEXT
-        )
-    ''')
-
-    # Migrations — idempotent; safe on every connection.
-    existing_cols = {row[1] for row in conn.execute("PRAGMA table_info('activities')")}
-
-    # createdAt: backfill from lastUpdated for pre-existing rows.
-    if 'createdAt' not in existing_cols:
-        conn.execute("ALTER TABLE activities ADD COLUMN createdAt TEXT NOT NULL DEFAULT ''")
-        conn.execute("UPDATE activities SET createdAt = lastUpdated WHERE createdAt = ''")
-
-    # googleMapsLink: nullable; defaults to NULL for existing rows.
-    if 'googleMapsLink' not in existing_cols:
-        conn.execute("ALTER TABLE activities ADD COLUMN googleMapsLink TEXT")
-
+def _ensure_schema(conn: psycopg.Connection) -> None:
+    global _schema_ready
+    if _schema_ready:
+        return
+    with conn.cursor() as cur:
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS activities (
+                "url"             TEXT PRIMARY KEY,
+                "shortName"       TEXT NOT NULL DEFAULT '',
+                "alive"           BOOLEAN NOT NULL DEFAULT TRUE,
+                "createdAt"       TEXT NOT NULL DEFAULT '',
+                "lastUpdated"     TEXT NOT NULL DEFAULT '',
+                "category"        TEXT,
+                "openHours"       TEXT,
+                "address"         TEXT,
+                "googleMapsLink"  TEXT,
+                "services"        TEXT,
+                "description"     TEXT,
+                "userRating"      INTEGER,
+                "drivingMinutes"  INTEGER,
+                "transitMinutes"  INTEGER,
+                "distanceKm"      DOUBLE PRECISION,
+                "userComment"     TEXT,
+                "price"           TEXT
+            )
+        ''')
+        # Forward-compatible additive migrations (Postgres supports
+        # IF NOT EXISTS on ADD COLUMN).
+        cur.execute('ALTER TABLE activities ADD COLUMN IF NOT EXISTS "createdAt" TEXT NOT NULL DEFAULT \'\'')
+        cur.execute('ALTER TABLE activities ADD COLUMN IF NOT EXISTS "googleMapsLink" TEXT')
+        # Backfill for rows imported from a pre-createdAt snapshot.
+        cur.execute('UPDATE activities SET "createdAt" = "lastUpdated" WHERE "createdAt" = \'\'')
     conn.commit()
-    _conn = conn
-    return conn
+    _schema_ready = True
+
+
+def _get_conn() -> psycopg.Connection:
+    global _conn
+    if _conn is not None and not _conn.closed:
+        return _conn
+    _conn = psycopg.connect(_DATABASE_URL, row_factory=dict_row)
+    _ensure_schema(_conn)
+    return _conn
 
 
 def clear_cache():
     """Close and clear the cached connection (tests / long-running processes)."""
-    global _conn
-    if _conn is not None:
+    global _conn, _schema_ready
+    if _conn is not None and not _conn.closed:
         _conn.close()
-        _conn = None
+    _conn = None
+    _schema_ready = False
 
 
-def _row_to_activity(row: sqlite3.Row) -> Optional[dict]:
-    if row is None or not row['url']:
+def _row_to_activity(row: Optional[dict]) -> Optional[dict]:
+    if row is None or not row.get('url'):
         return None
 
     activity = {
@@ -108,24 +122,24 @@ def _row_to_activity(row: sqlite3.Row) -> Optional[dict]:
     }
 
     for field in _OPTIONAL_STRING_FIELDS:
-        value = row[field]
+        value = row.get(field)
         if value:
             activity[field] = value
 
-    services = row['services']
+    services = row.get('services')
     if services:
         try:
             activity['services'] = json.loads(services)
         except (json.JSONDecodeError, TypeError):
             activity['services'] = [s.strip() for s in services.split(',')]
 
-    if row['userRating'] is not None:
+    if row.get('userRating') is not None:
         activity['userRating'] = int(row['userRating'])
-    if row['drivingMinutes'] is not None:
+    if row.get('drivingMinutes') is not None:
         activity['drivingMinutes'] = int(row['drivingMinutes'])
-    if row['transitMinutes'] is not None:
+    if row.get('transitMinutes') is not None:
         activity['transitMinutes'] = int(row['transitMinutes'])
-    if row['distanceKm'] is not None:
+    if row.get('distanceKm') is not None:
         activity['distanceKm'] = float(row['distanceKm'])
 
     return activity
@@ -153,7 +167,7 @@ def _activity_to_params(activity: dict) -> dict:
     return {
         'url': activity.get('url', ''),
         'shortName': activity.get('shortName', '') or '',
-        'alive': 0 if activity.get('alive') is False else 1,
+        'alive': False if activity.get('alive') is False else True,
         'createdAt': created_at,
         'lastUpdated': last_updated,
         'category': opt('category'),
@@ -173,13 +187,17 @@ def _activity_to_params(activity: dict) -> dict:
 
 def load_all_activities() -> list[dict]:
     conn = _get_conn()
-    rows = conn.execute('SELECT * FROM activities').fetchall()
+    with conn.cursor() as cur:
+        cur.execute('SELECT * FROM activities')
+        rows = cur.fetchall()
     return [a for a in (_row_to_activity(r) for r in rows) if a]
 
 
 def get_activity_by_url(url: str) -> Optional[dict]:
     conn = _get_conn()
-    row = conn.execute('SELECT * FROM activities WHERE url = ?', (url,)).fetchone()
+    with conn.cursor() as cur:
+        cur.execute('SELECT * FROM activities WHERE "url" = %s', (url,))
+        row = cur.fetchone()
     return _row_to_activity(row) if row else None
 
 
@@ -187,28 +205,20 @@ def add_activity(activity: dict) -> dict:
     conn = _get_conn()
     params = _activity_to_params(activity)
 
-    # INSERT OR REPLACE deletes and re-inserts, so we must preserve the
-    # existing createdAt when the URL is already known. createdAt is only
-    # written on creation.
-    existing = conn.execute(
-        'SELECT createdAt FROM activities WHERE url = ?', (params['url'],)
-    ).fetchone()
-    if existing and existing['createdAt']:
+    # Preserve existing createdAt for known URLs (write-once invariant).
+    with conn.cursor() as cur:
+        cur.execute(
+            'SELECT "createdAt" FROM activities WHERE "url" = %s',
+            (params['url'],),
+        )
+        existing = cur.fetchone()
+    if existing and existing.get('createdAt'):
         params['createdAt'] = existing['createdAt']
 
-    conn.execute(
-        '''INSERT OR REPLACE INTO activities (
-            url, shortName, alive, createdAt, lastUpdated, category, openHours, address,
-            googleMapsLink, services, description, userRating, drivingMinutes, transitMinutes,
-            distanceKm, userComment, price
-        ) VALUES (
-            :url, :shortName, :alive, :createdAt, :lastUpdated, :category, :openHours, :address,
-            :googleMapsLink, :services, :description, :userRating, :drivingMinutes, :transitMinutes,
-            :distanceKm, :userComment, :price
-        )''',
-        params,
-    )
+    with conn.cursor() as cur:
+        cur.execute(_UPSERT_SQL, params)
     conn.commit()
+
     if 'lastUpdated' not in activity:
         activity['lastUpdated'] = params['lastUpdated']
     if 'createdAt' not in activity:
@@ -234,20 +244,22 @@ def update_activity_field(url: str, field: str, value) -> Optional[dict]:
     if value is None:
         cell_value = None
     elif field == 'alive':
-        cell_value = 1 if value else 0
+        cell_value = bool(value)
     elif field == 'services' and isinstance(value, list):
         cell_value = json.dumps(value)
     elif isinstance(value, bool):
-        cell_value = 1 if value else 0
+        cell_value = bool(value)
     else:
         cell_value = value
 
-    cursor = conn.execute(
-        f'UPDATE activities SET {field} = ? WHERE url = ?',
-        (cell_value, url),
-    )
+    with conn.cursor() as cur:
+        cur.execute(
+            f'UPDATE activities SET "{field}" = %s WHERE "url" = %s',
+            (cell_value, url),
+        )
+        rowcount = cur.rowcount
     conn.commit()
-    if cursor.rowcount == 0:
+    if rowcount == 0:
         return None
     return get_activity_by_url(url)
 
