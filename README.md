@@ -2,18 +2,17 @@
 
 A tool to discover and catalogue kid-friendly activities in Munich and Bavaria. Combines Google search, web crawling, and LLM analysis.
 
-Self-hosted: a React frontend served by any static-file host, a small Express API (Node), and a local **SQLite** database.
+Self-hosted: a React frontend served by any static-file host, Python enrichment scripts and a Telegram bot, all backed by **PostgreSQL**.
 
 ## Quick Start
 
 ### 1. Install dependencies
 
 ```bash
-# Node deps (root + API server)
+# Node deps (frontend + tooling)
 npm install
-cd node-server && npm install && cd ..
 
-# Python deps (for the enrichment pipeline and Telegram bot)
+# Python deps (enrichment pipeline + Telegram bot)
 cd server && python -m venv venv && source venv/bin/activate && pip install -r requirements.txt && cd ..
 ```
 
@@ -25,53 +24,45 @@ Copy `env.example` to `.env` and fill in the keys you need:
 cp env.example .env
 ```
 
-All variables are optional:
-
 | Variable | Purpose |
 |----------|---------|
-| `KINDER_DB_PATH` | Override SQLite DB location (absolute or repo-relative). Defaults to `data/activities.db` |
+| `DATABASE_URL` | PostgreSQL connection string. Required by the Python services. |
 | `OPENAI_API_KEY` | Required for LLM analysis (`analyse`, `analyse-all`, `bot`) |
 | `TELEGRAM_BOT_TOKEN` | Required for `npm run bot` |
+| `VITE_BASE_PATH` | Optional sub-path the frontend is served under (e.g. `kinder-activities`) |
+
+Spin up a local Postgres (e.g. `brew install postgresql@16 && brew services start postgresql@16`), then:
+
+```bash
+createuser kinder
+createdb -O kinder kinder_activities_dev
+```
+
+and set `DATABASE_URL=postgresql://kinder@localhost:5432/kinder_activities_dev` in `.env`. The Python services create the schema on first connect.
 
 ### 3. Run locally
 
 ```bash
-# Starts both the Express API (:3002) and the Vite dev server
-npm run dev:all
+npm run dev   # Vite frontend
+npm run bot   # Telegram bot (in a separate terminal)
 ```
 
 Open http://localhost:5173.
 
-On first run, the SQLite file is created automatically at `data/activities.db` with the empty schema. Populate it via the enrichment pipeline (`npm run run`) or the Telegram bot.
-
-## Deployment (self-host)
-
-A minimal deployment on any Linux VPS:
-
-1. Copy the repo to the server (git clone or rsync).
-2. `npm install` at the root and in `node-server/`.
-3. `npm run build` — outputs static files to `dist/`.
-4. Copy your local `data/activities.db` to the server (or let it start empty).
-5. Set `KINDER_DB_PATH` in `.env` if the DB lives outside the repo.
-6. Run the API server as a long-lived process (systemd, pm2, etc.):
-   ```bash
-   node node-server/server.js   # listens on :3002
-   ```
-7. Configure a reverse proxy (nginx / Caddy) to serve `dist/` as static files and proxy `/api/*` → `http://localhost:3002`.
+The frontend expects an `/api/*` backend (list/get/update/delete endpoints) — provide it via your preferred runtime or a reverse-proxy on the VPS.
 
 ## Scripts
 
 | Command | Description |
 |---------|-------------|
-| `npm run dev:all` | Start API server + Vite frontend together |
-| `npm run dev` | Vite frontend only |
-| `npm run server` | Express API server only (:3002) |
+| `npm run dev` | Vite frontend dev server |
 | `npm run build` | Build the frontend for production |
 | `npm run preview` | Preview a production build locally |
+| `npm run lint` | ESLint over all sources |
 
 ### Data enrichment (Python)
 
-All enrichment scripts write directly to SQLite via `server/db_service.py`.
+All enrichment scripts write directly to Postgres via `server/db_service.py`.
 
 | Command | Description |
 |---------|-------------|
@@ -79,7 +70,7 @@ All enrichment scripts write directly to SQLite via `server/db_service.py`.
 | `npm run search` | Search Google for new activity URLs |
 | `npm run merge-serp` | Merge search results into `data/all-urls.json` |
 | `npm run check-alive` | Check URL availability & content types |
-| `npm run analyse-all` | Analyse new URLs with the LLM, save to SQLite |
+| `npm run analyse-all` | Analyse new URLs with the LLM, save to Postgres |
 | `npm run analyse <url>` | Analyse a single URL |
 | `npm run crawl <url>` | Debug: show raw crawler output |
 | `npm run bot` | Start the Telegram bot |
@@ -88,7 +79,7 @@ All enrichment scripts write directly to SQLite via `server/db_service.py`.
 
 | Path | Purpose |
 |------|---------|
-| `data/activities.db` | SQLite database (source of truth) |
+| Postgres `activities` table | Source of truth — see [DATA_FLOW.md](DATA_FLOW.md) for the schema |
 | `data/all-urls.json` | All discovered URLs with status |
 | `data/serp/` | Raw Google search results |
 
@@ -101,16 +92,10 @@ All enrichment scripts write directly to SQLite via `server/db_service.py`.
 └──────────────────────────┬───────────────────────────────────┘
                            │  /api/*
                            ▼
-┌──────────────────────────────────────────────────────────────┐
-│            Express API (node-server/server.js :3002)          │
-│                  better-sqlite3 → activities.db               │
-└──────────────────────────┬───────────────────────────────────┘
-                           │
-                           ▼
-               ┌───────────────────────┐
-               │   data/activities.db  │ ◀──── Python enrichment
-               │       (SQLite)        │       (serp → crawl → LLM)
-               └───────────────────────┘ ◀──── Telegram bot (bot.py)
+                  ┌────────────────────┐
+                  │   PostgreSQL       │ ◀──── Python enrichment
+                  │   (activities)     │       (serp → crawl → LLM)
+                  └────────────────────┘ ◀──── Telegram bot (bot.py)
 ```
 
 See [DATA_FLOW.md](DATA_FLOW.md) for the full pipeline and schema.
@@ -119,6 +104,7 @@ See [DATA_FLOW.md](DATA_FLOW.md) for the full pipeline and schema.
 
 | Variable | Description |
 |----------|-------------|
-| `KINDER_DB_PATH` | Optional SQLite path override |
+| `DATABASE_URL` | PostgreSQL connection string (required) |
 | `OPENAI_API_KEY` | OpenAI API key (required for LLM analysis) |
 | `TELEGRAM_BOT_TOKEN` | Telegram bot token (required for `npm run bot`) |
+| `VITE_BASE_PATH` | Sub-path the web app is served under (e.g. `kinder-activities`) |
