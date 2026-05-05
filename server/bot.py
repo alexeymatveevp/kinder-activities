@@ -16,7 +16,7 @@ import aiohttp
 from pathlib import Path
 from datetime import date
 from typing import Optional
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, unquote_plus, urlparse
 
 from dotenv import load_dotenv
 from telegram import Update
@@ -125,13 +125,47 @@ def is_google_maps_url(url: str) -> bool:
     return False
 
 
+_MAPS_PLACE_PATH_RE = re.compile(r'^/maps/place/([^/]+)', re.IGNORECASE)
+
+
+def extract_place_name_from_maps_url(url: str) -> Optional[str]:
+    """Pull the place name out of a long-form Google Maps URL.
+
+    e.g. ".../maps/place/JUMP+House+M%C3%BCnchen/@..." -> "JUMP House München".
+    Returns None for short links (maps.app.goo.gl, etc.) or URLs without a
+    /maps/place/<name> segment.
+    """
+    try:
+        path = urlparse(url).path or ''
+    except Exception:
+        return None
+    m = _MAPS_PLACE_PATH_RE.match(path)
+    if not m:
+        return None
+    name = unquote_plus(m.group(1)).strip()
+    return name or None
+
+
+def extract_user_name_from_message(message_text: str, urls: list[str]) -> Optional[str]:
+    """Return whatever non-URL text the user typed in the same message.
+
+    Strips each URL from the original text, collapses whitespace, returns the
+    result or None if empty.
+    """
+    text = message_text or ''
+    for u in urls:
+        text = text.replace(u, ' ')
+    cleaned = ' '.join(text.split()).strip()
+    return cleaned or None
+
+
 def split_activity_and_maps_urls(urls: list[str]) -> tuple[Optional[str], Optional[str], Optional[str]]:
     """
     Given the URLs found in a message, return (activity_url, google_maps_link, error).
 
     Rules:
       0 URLs -> error
-      1 URL  -> activity URL only (must not itself be a maps URL)
+      1 URL  -> activity URL OR maps-only entry (returns (None, maps_url, None))
       2 URLs -> exactly one must be a maps URL; the other becomes the activity URL
       3+     -> error
     """
@@ -141,10 +175,8 @@ def split_activity_and_maps_urls(urls: list[str]) -> tuple[Optional[str], Option
     if len(urls) == 1:
         only = urls[0]
         if is_google_maps_url(only):
-            return None, None, (
-                "I got a Google Maps link but no activity URL. "
-                "Please send the activity URL too."
-            )
+            # Maps-only entry: caller will save just the location.
+            return None, only, None
         return only, None, None
 
     if len(urls) == 2:
@@ -347,6 +379,29 @@ def save_minimal_activity(url: str, google_maps_link: Optional[str] = None) -> b
     return success
 
 
+def save_maps_only_entry(maps_url: str, user_name: Optional[str] = None) -> tuple[bool, str]:
+    """Save a maps-only entry (no activity URL).
+
+    Uses the Maps URL itself as the row's primary key. shortName resolution
+    priority: user-typed text > parsed /maps/place/<NAME> > placeholder.
+    Returns (success, resolved_name) so the caller can craft a reply.
+    """
+    name = (
+        (user_name or '').strip()
+        or extract_place_name_from_maps_url(maps_url)
+        or '📍 Map pin'
+    )
+    activity = {
+        "url": maps_url,
+        "shortName": name,
+        "alive": True,
+        "lastUpdated": date.today().isoformat(),
+        "googleMapsLink": maps_url,
+    }
+    success, _, _ = save_or_update_activity(activity)
+    return success, name
+
+
 def build_activity_dict(result: CrawlResult, google_maps_link: Optional[str] = None) -> dict:
     """Build activity dict from CrawlResult (matches run_analyser_for_all_urls.py)"""
     activity = {
@@ -455,7 +510,10 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         f"Just paste a URL like:\n"
         f"https://www.kindermuseum-muenchen.de\n\n"
         f"You can also paste a Google Maps link in the same message "
-        f"(any order) and I'll save it together with the activity."
+        f"(any order) and I'll save it together with the activity.\n\n"
+        f"Or send only a Google Maps link to save a location without an "
+        f"activity website. Any text you put before or after the link "
+        f"will be used as the name."
     )
 
 
@@ -472,13 +530,19 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "*Optional Google Maps link:*\n"
         "Send the activity URL together with a Google Maps link "
         "(in any order). The Maps link will be saved to the activity.\n\n"
+        "*Maps-only entries:*\n"
+        "Send only a Google Maps link to save a location without an "
+        "activity website. Any text you type before or after the link "
+        "is used as the name.\n\n"
         "*Commands:*\n"
         "/start - Welcome message\n"
         "/help - Show this help\n\n"
         "*Example (1 URL):*\n"
         "https://www.wildpark-poing.de\n\n"
         "*Example (activity + maps):*\n"
-        "https://www.wildpark-poing.de https://maps.app.goo.gl/abc123",
+        "https://www.wildpark-poing.de https://maps.app.goo.gl/abc123\n\n"
+        "*Example (maps only with a name):*\n"
+        "Best Cafe Munich https://maps.app.goo.gl/abc123",
         parse_mode="Markdown",
     )
 
@@ -487,8 +551,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     """Handle incoming messages - main pipeline.
 
     Accepts:
-      - 1 URL  -> activity URL
-      - 2 URLs -> one activity URL + one Google Maps URL (any order)
+      - 1 URL (non-maps)  -> activity URL, full pipeline.
+      - 1 URL (maps)      -> maps-only entry (no crawl/analyse). Any non-URL
+                             text in the message is used as the name.
+      - 2 URLs            -> one activity URL + one Google Maps URL (any order).
     """
     message_text = update.message.text
     if not message_text:
@@ -511,6 +577,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     user_first = update.effective_user.first_name if update.effective_user else "user"
     print(f"Received URL from {user_first}: activity={activity_url}, maps={google_maps_link}")
+
+    # Maps-only branch: skip the full pipeline entirely.
+    if activity_url is None and google_maps_link is not None:
+        user_name = extract_user_name_from_message(message_text, urls)
+        success, resolved_name = save_maps_only_entry(google_maps_link, user_name=user_name)
+        if success:
+            await update.message.reply_text(
+                f"📍 Saved Google Maps location: *{resolved_name}*",
+                parse_mode="Markdown",
+                disable_web_page_preview=True,
+            )
+        else:
+            await update.message.reply_text(
+                "❌ Failed to save the Google Maps location."
+            )
+        return
 
     # Check if OpenAI API key is set
     if not os.getenv("OPENAI_API_KEY"):
