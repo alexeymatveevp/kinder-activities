@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react'
+import MapScreen from './MapScreen'
 import './App.css'
 
 // import.meta.env.BASE_URL is populated from vite.config's `base` and always
@@ -389,7 +390,7 @@ function formatMinutes(min) {
   return min < 60 ? `${min} min` : `${Math.floor(min / 60)}h ${min % 60}min`
 }
 
-function MapsLinkForm({ activity, onSave }) {
+function MapsLinkForm({ activity, onSave, label = '🗺️ Add a Google Maps link' }) {
   const [value, setValue] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
@@ -416,7 +417,7 @@ function MapsLinkForm({ activity, onSave }) {
   return (
     <form className="details-modal__maps-form" onSubmit={handleSubmit}>
       <label htmlFor="maps-link-input" className="details-modal__maps-label">
-        🗺️ Add a Google Maps link
+        {label}
       </label>
       <div className="details-modal__maps-row">
         <input
@@ -461,6 +462,9 @@ function DetailsModal({ activity, onClose, onSaveMapsLink }) {
 
   const hasMapsLink = !!activity.googleMapsLink
   const embedSrc = hasMapsLink ? buildMapsEmbedSrc(activity) : null
+  // Short Maps links (maps.app.goo.gl/..., goo.gl/maps/...) don't carry
+  // inline coordinates, so they cannot appear as a pin on the multi-pin map.
+  const mapsLinkLacksCoords = hasMapsLink && extractMapsCoords(activity.googleMapsLink) == null
   const driving = formatMinutes(activity.drivingMinutes)
   const transit = formatMinutes(activity.transitMinutes)
   const distance = activity.distanceKm != null ? `${activity.distanceKm} km` : null
@@ -533,6 +537,19 @@ function DetailsModal({ activity, onClose, onSaveMapsLink }) {
             >
               🗺️ Open in Google Maps
             </a>
+            {mapsLinkLacksCoords && (
+              <div className="details-modal__short-link-warning">
+                ⚠️ This is a short Maps link (no inline coordinates), so this
+                place can't be pinned on the Map view. To fix, open it in
+                Google Maps, copy the long URL from the address bar (look for
+                <code> @lat,lng,zoomz</code>), and paste it here:
+                <MapsLinkForm
+                  activity={activity}
+                  onSave={onSaveMapsLink}
+                  label="Replace with a long-form link"
+                />
+              </div>
+            )}
             {embedSrc ? (
               <iframe
                 title="Google Maps location"
@@ -683,6 +700,7 @@ function App() {
   const [noteModalUrl, setNoteModalUrl] = useState(null)
   const [nameModalUrl, setNameModalUrl] = useState(null)
   const [detailsModalUrl, setDetailsModalUrl] = useState(null)
+  const [currentScreen, setCurrentScreen] = useState('list') // 'list' | 'map'
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
   const [sidebarDragX, setSidebarDragX] = useState(null) // null = not dragging, number = current position
   const searchInputRef = useRef(null)
@@ -1146,11 +1164,32 @@ function App() {
       <div className="swipe-indicator" />
       
       {/* Sidebar with search and filters */}
-      <aside 
+      <aside
         ref={sidebarRef}
         className={`sidebar ${isMobileMenuOpen ? 'open' : ''} ${sidebarDragX !== null ? 'dragging' : ''}`}
         style={getSidebarStyle()}
       >
+        <div className="sidebar-screen-switch" role="tablist" aria-label="View mode">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={currentScreen === 'list'}
+            className={`sidebar-screen-switch__btn ${currentScreen === 'list' ? 'active' : ''}`}
+            onClick={() => { setCurrentScreen('list'); setIsMobileMenuOpen(false) }}
+          >
+            📋 List
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={currentScreen === 'map'}
+            className={`sidebar-screen-switch__btn ${currentScreen === 'map' ? 'active' : ''}`}
+            onClick={() => { setCurrentScreen('map'); setIsMobileMenuOpen(false) }}
+          >
+            🗺️ Map
+          </button>
+        </div>
+
         <div className="search-container">
           <span className="search-icon">🔍</span>
           <input
@@ -1212,54 +1251,63 @@ function App() {
       </aside>
       
       {/* Main content */}
-      <main className="main-content">
-        <header className="header">
-          <h1>🎨 Kinder Activities</h1>
-          <p>Discover fun activities for kids and families</p>
-        </header>
-        
-        <div className="stats">
-          <div className="stat-item">
-            <div className="stat-number">{stats.total}</div>
-            <div className="stat-label">Activities</div>
-          </div>
-          <div className="stat-item">
-            <div className="stat-number">{stats.categories}</div>
-            <div className="stat-label">Categories</div>
-          </div>
-          <div className="stat-item">
-            <div className="stat-number stat-number--visible">{stats.visible}</div>
-            <div className="stat-label">Visible</div>
-          </div>
-          <div className="stat-item">
-            <div className="stat-number">{stats.rated}</div>
-            <div className="stat-label">Rated</div>
-          </div>
-        </div>
-        
-        {filteredActivities.length > 0 ? (
-          <div className="activities-list">
-            {filteredActivities.map((activity, index) => (
-              <ActivityCard
-                key={activity.url || index}
-                activity={activity}
-                onRatingChange={handleRatingChange}
-                onRemove={handleRemove}
-                onCategoryChange={handleCategoryChange}
-                onCommentChange={handleCommentChange}
-                onOpenNote={handleOpenNote}
-                onOpenName={handleOpenName}
-                onOpenDetails={handleOpenDetails}
-                allCategories={allCategories}
-              />
-            ))}
-          </div>
+      <main className={`main-content ${currentScreen === 'map' ? 'main-content--map' : ''}`}>
+        {currentScreen === 'map' ? (
+          <MapScreen
+            activities={filteredActivities}
+            extractCoords={extractMapsCoords}
+          />
         ) : (
-          <div className="empty-state">
-            <div className="icon">🔍</div>
-            <p>No activities found</p>
-            {searchQuery && <p>Try a different search term</p>}
-          </div>
+          <>
+            <header className="header">
+              <h1>🎨 Kinder Activities</h1>
+              <p>Discover fun activities for kids and families</p>
+            </header>
+
+            <div className="stats">
+              <div className="stat-item">
+                <div className="stat-number">{stats.total}</div>
+                <div className="stat-label">Activities</div>
+              </div>
+              <div className="stat-item">
+                <div className="stat-number">{stats.categories}</div>
+                <div className="stat-label">Categories</div>
+              </div>
+              <div className="stat-item">
+                <div className="stat-number stat-number--visible">{stats.visible}</div>
+                <div className="stat-label">Visible</div>
+              </div>
+              <div className="stat-item">
+                <div className="stat-number">{stats.rated}</div>
+                <div className="stat-label">Rated</div>
+              </div>
+            </div>
+
+            {filteredActivities.length > 0 ? (
+              <div className="activities-list">
+                {filteredActivities.map((activity, index) => (
+                  <ActivityCard
+                    key={activity.url || index}
+                    activity={activity}
+                    onRatingChange={handleRatingChange}
+                    onRemove={handleRemove}
+                    onCategoryChange={handleCategoryChange}
+                    onCommentChange={handleCommentChange}
+                    onOpenNote={handleOpenNote}
+                    onOpenName={handleOpenName}
+                    onOpenDetails={handleOpenDetails}
+                    allCategories={allCategories}
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="empty-state">
+                <div className="icon">🔍</div>
+                <p>No activities found</p>
+                {searchQuery && <p>Try a different search term</p>}
+              </div>
+            )}
+          </>
         )}
       </main>
 
