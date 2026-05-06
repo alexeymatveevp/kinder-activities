@@ -286,6 +286,144 @@ function NoteModal({ activity, onSave, onClose }) {
   )
 }
 
+function AddActivityModal({ onSave, onClose }) {
+  const [url, setUrl] = useState('')
+  const [mapsLink, setMapsLink] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState(null)
+
+  const trimmedUrl = url.trim()
+  const trimmedMaps = mapsLink.trim()
+
+  let urlValid = true
+  let urlMessage = null
+  if (trimmedUrl) {
+    try {
+      const parsed = new URL(trimmedUrl)
+      if (!/^https?:$/.test(parsed.protocol)) {
+        urlValid = false
+        urlMessage = 'URL must start with http:// or https://'
+      } else if (isGoogleMapsUrl(trimmedUrl)) {
+        urlValid = false
+        urlMessage = 'That looks like a Google Maps link — paste it in the Maps field below.'
+      }
+    } catch {
+      urlValid = false
+      urlMessage = 'Not a valid URL'
+    }
+  }
+
+  let mapsValid = true
+  let mapsMessage = null
+  if (trimmedMaps && !isGoogleMapsUrl(trimmedMaps)) {
+    mapsValid = false
+    mapsMessage = 'Must be a Google Maps URL (e.g. google.com/maps/..., maps.app.goo.gl/...)'
+  }
+
+  const hasInput = !!(trimmedUrl || trimmedMaps)
+  const canSubmit = hasInput && urlValid && mapsValid && !submitting
+
+  const handleSubmit = async (e) => {
+    e.preventDefault()
+    if (!canSubmit) return
+    setSubmitting(true)
+    setError(null)
+    try {
+      await onSave({
+        url: trimmedUrl || undefined,
+        googleMapsLink: trimmedMaps || undefined,
+      })
+      onClose()
+    } catch (err) {
+      setError(err?.message || 'Failed to add activity.')
+      setSubmitting(false)
+    }
+  }
+
+  const handleKeyDown = (e) => {
+    if (e.key === 'Escape') {
+      e.stopPropagation()
+      if (!submitting) onClose()
+    }
+  }
+
+  const willCrawl = trimmedUrl && urlValid
+
+  return (
+    <div className="note-modal__overlay" onClick={submitting ? undefined : onClose}>
+      <div
+        className="note-modal__dialog add-modal__dialog"
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={handleKeyDown}
+      >
+        <h3 className="note-modal__title">Add new activity</h3>
+        <p className="add-modal__hint">
+          Paste an activity URL, a Google Maps link, or both. The pipeline runs
+          when an activity URL is provided (~30–60s).
+        </p>
+
+        <form onSubmit={handleSubmit} className="add-modal__form">
+          <label className="add-modal__field">
+            <span className="add-modal__label">Activity URL</span>
+            <input
+              type="url"
+              inputMode="url"
+              className="add-modal__input"
+              placeholder="https://www.example-activity.de"
+              value={url}
+              onChange={(e) => { setUrl(e.target.value); setError(null) }}
+              disabled={submitting}
+              autoFocus
+            />
+            {urlMessage && (
+              <span className="add-modal__error">{urlMessage}</span>
+            )}
+          </label>
+
+          <label className="add-modal__field">
+            <span className="add-modal__label">Google Maps link (optional)</span>
+            <input
+              type="url"
+              inputMode="url"
+              className="add-modal__input"
+              placeholder="https://www.google.com/maps/place/..."
+              value={mapsLink}
+              onChange={(e) => { setMapsLink(e.target.value); setError(null) }}
+              disabled={submitting}
+            />
+            {mapsMessage && (
+              <span className="add-modal__error">{mapsMessage}</span>
+            )}
+          </label>
+
+          {error && <div className="add-modal__server-error">⚠️ {error}</div>}
+
+          <div className="note-modal__actions">
+            <span className="note-modal__hint">
+              {submitting && willCrawl ? 'Analysing — this can take ~60s…' : 'Esc to cancel'}
+            </span>
+            <button
+              type="button"
+              className="note-modal__cancel"
+              onClick={onClose}
+              disabled={submitting}
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              className="note-modal__save"
+              disabled={!canSubmit}
+            >
+              {submitting ? '⏳ Adding…' : 'Add activity'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
 function NameModal({ activity, onSave, onClose }) {
   const [value, setValue] = useState(activity?.shortName || '')
 
@@ -450,7 +588,11 @@ function MapsLinkForm({ activity, onSave, label = '🗺️ Add a Google Maps lin
   )
 }
 
-function DetailsModal({ activity, onClose, onSaveMapsLink }) {
+function DetailsModal({ activity, onClose, onSaveMapsLink, onReanalyse }) {
+  const [reanalysing, setReanalysing] = useState(false)
+  const [reanalyseError, setReanalyseError] = useState(null)
+  const [editingMapsLink, setEditingMapsLink] = useState(false)
+
   useEffect(() => {
     if (!activity) return
     const handleKey = (e) => { if (e.key === 'Escape') onClose() }
@@ -468,6 +610,23 @@ function DetailsModal({ activity, onClose, onSaveMapsLink }) {
   const driving = formatMinutes(activity.drivingMinutes)
   const transit = formatMinutes(activity.transitMinutes)
   const distance = activity.distanceKm != null ? `${activity.distanceKm} km` : null
+
+  // Reanalyse only makes sense for a real website URL — not a maps-only entry
+  // where `url` IS the Google Maps link.
+  const canReanalyse = !!(activity.url && !isGoogleMapsUrl(activity.url) && onReanalyse)
+
+  const handleReanalyseClick = async () => {
+    if (!canReanalyse || reanalysing) return
+    setReanalysing(true)
+    setReanalyseError(null)
+    try {
+      await onReanalyse(activity.url)
+    } catch (err) {
+      setReanalyseError(err?.message || 'Reanalyse failed.')
+    } finally {
+      setReanalysing(false)
+    }
+  }
 
   const travelItems = []
   if (driving) travelItems.push({ icon: '🚗', label: 'Driving', text: driving })
@@ -502,19 +661,51 @@ function DetailsModal({ activity, onClose, onSaveMapsLink }) {
     <div className="note-modal__overlay" onClick={onClose}>
       <div className="note-modal__dialog details-modal__dialog" onClick={(e) => e.stopPropagation()}>
         <div className="details-modal__header">
-          <h3 className="note-modal__title details-modal__title">
-            {activity.shortName || 'Unnamed Activity'}
-          </h3>
-          <button
-            type="button"
-            className="details-modal__close"
-            onClick={onClose}
-            aria-label="Close"
-            title="Close"
-          >
-            ✕
-          </button>
+          <div className="details-modal__title-block">
+            <h3 className="note-modal__title details-modal__title">
+              {activity.shortName || 'Unnamed Activity'}
+            </h3>
+            {activity.url && (
+              <a
+                className="details-modal__url"
+                href={activity.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={activity.url}
+              >
+                {activity.url}
+              </a>
+            )}
+          </div>
+          <div className="details-modal__header-actions">
+            {canReanalyse && (
+              <button
+                type="button"
+                className="details-modal__reanalyse"
+                onClick={handleReanalyseClick}
+                disabled={reanalysing}
+                title="Re-fetch and re-extract this activity from its website. Your name and category are kept."
+              >
+                {reanalysing ? '⏳ Reanalysing…' : '🔄 Reanalyse'}
+              </button>
+            )}
+            <button
+              type="button"
+              className="details-modal__close"
+              onClick={onClose}
+              aria-label="Close"
+              title="Close"
+            >
+              ✕
+            </button>
+          </div>
         </div>
+
+        {reanalyseError && (
+          <div className="details-modal__reanalyse-error">
+            ⚠️ {reanalyseError}
+          </div>
+        )}
 
         {rows.length > 0 && (
           <dl className="details-modal__rows">
@@ -529,14 +720,36 @@ function DetailsModal({ activity, onClose, onSaveMapsLink }) {
 
         {hasMapsLink ? (
           <div className="details-modal__map-section">
-            <a
-              href={activity.googleMapsLink}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="details-modal__map-link"
-            >
-              🗺️ Open in Google Maps
-            </a>
+            <div className="details-modal__map-link-row">
+              <a
+                href={activity.googleMapsLink}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="details-modal__map-link"
+              >
+                🗺️ Open in Google Maps
+              </a>
+              {!mapsLinkLacksCoords && (
+                <button
+                  type="button"
+                  className="details-modal__map-change"
+                  onClick={() => setEditingMapsLink((v) => !v)}
+                  title="Replace the saved Google Maps link"
+                >
+                  {editingMapsLink ? 'Cancel' : '✏️ Change'}
+                </button>
+              )}
+            </div>
+            {!mapsLinkLacksCoords && editingMapsLink && (
+              <MapsLinkForm
+                activity={activity}
+                onSave={async (url, link) => {
+                  await onSaveMapsLink(url, link)
+                  setEditingMapsLink(false)
+                }}
+                label="Replace the Google Maps link"
+              />
+            )}
             {mapsLinkLacksCoords && (
               <div className="details-modal__short-link-warning">
                 ⚠️ This is a short Maps link (no inline coordinates), so this
@@ -700,6 +913,7 @@ function App() {
   const [noteModalUrl, setNoteModalUrl] = useState(null)
   const [nameModalUrl, setNameModalUrl] = useState(null)
   const [detailsModalUrl, setDetailsModalUrl] = useState(null)
+  const [addModalOpen, setAddModalOpen] = useState(false)
   const [currentScreen, setCurrentScreen] = useState('list') // 'list' | 'map'
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
   const [sidebarDragX, setSidebarDragX] = useState(null) // null = not dragging, number = current position
@@ -899,11 +1113,11 @@ function App() {
       )
     }
 
-    // Sort by createdAt descending (newest first). createdAt is an ISO date
-    // string (YYYY-MM-DD) so lexicographic compare matches chronological order.
-    // Empty createdAt sorts last.
+    // Sort by lastUpdated descending (most recently touched first).
+    // lastUpdated is an ISO date string (YYYY-MM-DD), so lexicographic
+    // compare matches chronological order. Empty values sort last.
     return [...result].sort((a, b) =>
-      (b.createdAt || '').localeCompare(a.createdAt || '')
+      (b.lastUpdated || '').localeCompare(a.lastUpdated || '')
     )
   }, [activities, activeCategory, searchQuery])
   
@@ -1098,6 +1312,61 @@ function App() {
     }))
   }, [])
 
+  const handleReanalyse = useCallback(async (url) => {
+    const response = await fetch(`${API_BASE}/activities/reanalyse`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url }),
+    })
+
+    if (!response.ok) {
+      let serverError = 'Failed to reanalyse.'
+      try {
+        const body = await response.json()
+        if (body?.error) serverError = body.error
+      } catch { /* ignore */ }
+      throw new Error(serverError)
+    }
+
+    const { activity } = await response.json()
+    // Replace the row entirely — every LLM-touched field may have changed.
+    setActivities(prev => prev.map(a => (a.url === url ? activity : a)))
+  }, [])
+
+  const handleAddActivity = useCallback(async ({ url, googleMapsLink }) => {
+    const body = {}
+    if (url) body.url = url
+    if (googleMapsLink) body.googleMapsLink = googleMapsLink
+
+    const response = await fetch(`${API_BASE}/activities`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+
+    if (!response.ok) {
+      let serverError = 'Failed to create activity.'
+      try {
+        const data = await response.json()
+        if (data?.error) serverError = data.error
+      } catch { /* ignore */ }
+      throw new Error(serverError)
+    }
+
+    const { activity } = await response.json()
+    setActivities(prev => {
+      // Replace if URL collides (idempotency safety), else prepend.
+      const idx = prev.findIndex((a) => a.url === activity.url)
+      if (idx >= 0) {
+        const next = prev.slice()
+        next[idx] = activity
+        return next
+      }
+      return [activity, ...prev]
+    })
+  }, [])
+
+
   // Handle Escape key: go back / reset filters / focus search
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -1169,6 +1438,16 @@ function App() {
         className={`sidebar ${isMobileMenuOpen ? 'open' : ''} ${sidebarDragX !== null ? 'dragging' : ''}`}
         style={getSidebarStyle()}
       >
+        <div className="sidebar-add">
+          <button
+            type="button"
+            className="sidebar-add__btn"
+            onClick={() => { setAddModalOpen(true); setIsMobileMenuOpen(false) }}
+          >
+            ➕ Add activity
+          </button>
+        </div>
+
         <div className="sidebar-screen-switch" role="tablist" aria-label="View mode">
           <button
             type="button"
@@ -1338,7 +1617,15 @@ function App() {
         activity={detailsModalActivity}
         onClose={handleCloseDetails}
         onSaveMapsLink={handleMapsLinkChange}
+        onReanalyse={handleReanalyse}
       />
+
+      {addModalOpen && (
+        <AddActivityModal
+          onSave={handleAddActivity}
+          onClose={() => setAddModalOpen(false)}
+        />
+      )}
     </div>
   )
 }

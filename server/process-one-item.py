@@ -11,6 +11,7 @@ Usage:
     python process-one-item.py <URL>
 """
 
+import argparse
 import sys
 import json
 import asyncio
@@ -130,19 +131,37 @@ async def check_url_alive(url: str) -> tuple[bool, str]:
 # Save to Google Sheets
 # ============================================================
 
-def build_activity_dict(result) -> dict:
+def build_activity_dict(
+    result,
+    preserve_name: bool = False,
+    preserve_category: bool = False,
+    google_maps_link: str | None = None,
+) -> dict:
+    """Build the activity dict to pass to save_or_update_activity.
+
+    `preserve_name` / `preserve_category` omit the corresponding key from the
+    dict — `update_activity`'s {**current, **updates} merge then keeps the
+    existing value untouched. Used by the Reanalyse flow to protect manual
+    edits to shortName / category.
+
+    `google_maps_link` (optional) is included when the caller wants to attach
+    a Maps link to the row alongside the analysed data.
+    """
     activity = {
         "url": result.url,
-        "shortName": result.short_name or result.url.split("/")[2].replace("www.", ""),
         "alive": result.available,
         "lastUpdated": date.today().isoformat(),
     }
-    if result.category:
+    if not preserve_name:
+        activity["shortName"] = result.short_name or result.url.split("/")[2].replace("www.", "")
+    if not preserve_category and result.category:
         activity["category"] = result.category
     if result.open_hours:
         activity["openHours"] = result.open_hours
     if result.address:
         activity["address"] = result.address
+    if google_maps_link:
+        activity["googleMapsLink"] = google_maps_link
     if result.prices:
         activity["price"] = format_prices_text(result.prices)
     if result.services:
@@ -164,7 +183,12 @@ def build_activity_dict(result) -> dict:
 # Pipeline
 # ============================================================
 
-async def process_url(url: str) -> None:
+async def process_url(
+    url: str,
+    preserve_name: bool = False,
+    preserve_category: bool = False,
+    google_maps_link: str | None = None,
+) -> None:
     # Step 1: Check if URL exists in all-urls.json
     if url_exists_in_all_urls(url):
         print(f"ℹ️  URL already in database: {url}")
@@ -203,8 +227,13 @@ async def process_url(url: str) -> None:
             print(f"   Error: {analysis.error or 'Unknown error'}")
             return
 
-        # Step 5: Save to Google Sheets
-        activity = build_activity_dict(analysis)
+        # Step 5: Save to DB (preserves shortName / category when those flags are set)
+        activity = build_activity_dict(
+            analysis,
+            preserve_name=preserve_name,
+            preserve_category=preserve_category,
+            google_maps_link=google_maps_link,
+        )
         success, _, is_update = save_or_update_activity(activity)
 
         if success:
@@ -241,20 +270,40 @@ async def process_url(url: str) -> None:
 
 
 async def main():
-    if len(sys.argv) < 2:
-        print("Usage: python process-one-item.py <URL>")
-        print("Example: python process-one-item.py https://www.kindermuseum-muenchen.de")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(
+        description="Process a single URL through the full analyser pipeline."
+    )
+    parser.add_argument("url", help="URL to analyse (must start with http:// or https://)")
+    parser.add_argument(
+        "--preserve-name",
+        action="store_true",
+        help="Don't overwrite the existing shortName with the LLM-derived one.",
+    )
+    parser.add_argument(
+        "--preserve-category",
+        action="store_true",
+        help="Don't overwrite the existing category with the LLM-derived one.",
+    )
+    parser.add_argument(
+        "--maps-link",
+        default=None,
+        help="Optional Google Maps URL to attach to the activity record.",
+    )
+    args = parser.parse_args()
 
-    url = sys.argv[1]
-
+    url = args.url
     if not url.startswith("http://") and not url.startswith("https://"):
         print(f"❌ Invalid URL: {url}")
         print("   URL must start with http:// or https://")
         sys.exit(1)
 
     print(f"🚀 Processing: {url}\n")
-    await process_url(url)
+    await process_url(
+        url,
+        preserve_name=args.preserve_name,
+        preserve_category=args.preserve_category,
+        google_maps_link=args.maps_link,
+    )
     print(f"\n✅ Done!")
 
 
